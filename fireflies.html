@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firefly Meadow – PeerJS multiplayer</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root{--night:#0e1f2b;--moss:#1d3b34;--amber:#ffc857;--mint:#7bdff2;--text:#e8f1ee}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--night);color:var(--text);font-family:Georgia,"Times New Roman",serif}
+#lobby{max-width:420px;margin:0 auto;padding:12vh 24px 24px}
+h1{font-size:2.4rem;font-weight:400;font-style:italic;margin:0 0 6px;color:var(--amber)}
+p{line-height:1.5;color:#a9c3bb;margin:0 0 22px}
+input,button{font:inherit;font-size:1rem;padding:12px 14px;border-radius:8px;border:1px solid #2f5a4f;background:var(--moss);color:var(--text);width:100%;margin-bottom:10px}
+input:focus,button:focus-visible{outline:2px solid var(--mint);outline-offset:2px}
+button{cursor:pointer;background:var(--amber);color:#1a2a10;border:0;font-weight:bold}
+button.alt{background:transparent;color:var(--mint);border:1px solid var(--mint)}
+.row{display:flex;gap:10px}.row input{text-transform:uppercase;letter-spacing:.2em}.row button{width:auto;white-space:nowrap}
+#err{color:#ff9b9b;min-height:1.4em}
+#game{display:none;position:fixed;inset:0}
+canvas{display:block;width:100%;height:100%;touch-action:none;background:radial-gradient(#173229,#0e1f2b)}
+#hud{position:fixed;top:0;left:0;right:0;padding:10px 14px;display:flex;justify-content:space-between;gap:12px;pointer-events:none;font-size:.9rem}
+#board{background:#0e1f2bcc;padding:8px 12px;border-radius:8px;min-width:150px}
+#board div{display:flex;justify-content:space-between;gap:16px}
+#room b{color:var(--amber);letter-spacing:.2em;font-size:1.2rem}
+#room{background:#0e1f2bcc;padding:8px 12px;border-radius:8px}
+</style>
+</head>
+<body>
+<div id="lobby">
+  <h1>Firefly Meadow</h1>
+  <p>Glide through the night and gather glowing motes. Everyone in the same meadow plays live; first to 15 wins the round.</p>
+  <input id="name" maxlength="12" placeholder="Your name" autocomplete="off">
+  <button id="host">Start a meadow</button>
+  <div class="row"><input id="code" maxlength="4" placeholder="CODE"><button id="join" class="alt">Join</button></div>
+  <div id="err" role="alert"></div>
+</div>
+<div id="game">
+  <canvas id="cv"></canvas>
+  <div id="hud"><div id="room"></div><div id="board"></div></div>
+</div>
+
+<script>
+const W = 800, H = 500, PREFIX = 'firefly-meadow-', WIN = 15, SPEED = 230, TICK = 1000/30;
+const COLORS = ['#ffc857','#7bdff2','#f79ad3','#b8f28b','#ff9b6b','#c4a7ff','#fff2a8','#8bb5ff'];
+const $ = id => document.getElementById(id);
+let peer, isHost = false, myId = '', roomCode = '';
+let state = { p: [], c: [], msg: '' };            // what every client renders
+let players = {}, motes = [];                     // host-only authoritative data
+let conns = {};                                   // host: id -> connection
+let hostConn = null;                              // client: connection to host
+let input = { dx: 0, dy: 0 }, keys = {}, pointer = null;
+let roundMsg = '', msgUntil = 0;
+
+const err = t => $('err').textContent = t;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const makeCode = () => Array.from({length:4}, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random()*24)]).join('');
+const name = () => ($('name').value.trim() || 'Firefly').slice(0, 12);
+
+/* ---------- HOST ---------- */
+function startHost(tries = 0) {
+  roomCode = makeCode();
+  peer = new Peer(PREFIX + roomCode);
+  peer.on('open', id => { myId = id; isHost = true; addPlayer(id, name()); spawnMotes(); enterGame(); setInterval(hostTick, TICK); });
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id' && tries < 5) { peer.destroy(); startHost(tries + 1); }
+    else err('Could not reach the PeerJS server: ' + e.type);
+  });
+  peer.on('connection', c => {
+    c.on('data', d => {
+      if (d.t === 'hello') { conns[c.peer] = c; addPlayer(c.peer, String(d.name || 'Firefly').slice(0, 12)); }
+      else if (d.t === 'in' && players[c.peer]) { players[c.peer].dx = clamp(d.dx); players[c.peer].dy = clamp(d.dy); }
+    });
+    const drop = () => { delete players[c.peer]; delete conns[c.peer]; };
+    c.on('close', drop); c.on('error', drop);
+  });
+}
+const clamp = v => Math.max(-1, Math.min(1, +v || 0));
+function addPlayer(id, nm) {
+  const used = Object.values(players).map(p => p.color);
+  const color = COLORS.find(c => !used.includes(c)) || COLORS[Object.keys(players).length % COLORS.length];
+  players[id] = { x: rnd(60, W-60), y: rnd(60, H-60), dx: 0, dy: 0, score: 0, name: nm, color };
+}
+function spawnMotes() { motes = Array.from({length: 8}, () => ({ x: rnd(30, W-30), y: rnd(30, H-30) })); }
+function hostTick() {
+  const dt = TICK / 1000;
+  if (isHost) { players[myId].dx = input.dx; players[myId].dy = input.dy; }
+  for (const id in players) {
+    const p = players[id], len = Math.hypot(p.dx, p.dy) || 1, k = Math.min(1, len);
+    p.x = Math.max(12, Math.min(W-12, p.x + p.dx / len * k * SPEED * dt));
+    p.y = Math.max(12, Math.min(H-12, p.y + p.dy / len * k * SPEED * dt));
+    for (const m of motes) if (Math.hypot(m.x - p.x, m.y - p.y) < 22) {
+      p.score++; m.x = rnd(30, W-30); m.y = rnd(30, H-30);
+      if (p.score >= WIN) { roundMsg = p.name + ' wins the round!'; msgUntil = Date.now() + 3000; for (const q in players) players[q].score = 0; break; }
+    }
+  }
+  const snap = { p: Object.entries(players).map(([id, p]) => [id, Math.round(p.x), Math.round(p.y), p.color, p.name, p.score]),
+                 c: motes.map(m => [Math.round(m.x), Math.round(m.y)]), msg: Date.now() < msgUntil ? roundMsg : '' };
+  for (const id in conns) if (conns[id].open) conns[id].send(snap);
+  state = snap;
+}
+
+/* ---------- CLIENT ---------- */
+function joinGame(code) {
+  peer = new Peer();
+  peer.on('open', id => {
+    myId = id;
+    hostConn = peer.connect(PREFIX + code, { reliable: false });
+    const timeout = setTimeout(() => { err('No meadow found with that code.'); peer.destroy(); }, 8000);
+    hostConn.on('open', () => { clearTimeout(timeout); roomCode = code; hostConn.send({ t: 'hello', name: name() }); enterGame(); setInterval(sendInput, TICK); });
+    hostConn.on('data', d => state = d);
+    hostConn.on('close', () => { alert('The host left the meadow.'); location.reload(); });
+  });
+  peer.on('error', e => err(e.type === 'peer-unavailable' ? 'No meadow found with that code.' : 'Connection problem: ' + e.type));
+}
+let lastSent = '';
+function sendInput() {
+  const s = input.dx.toFixed(2) + input.dy.toFixed(2);
+  if (s !== lastSent && hostConn && hostConn.open) { hostConn.send({ t: 'in', dx: input.dx, dy: input.dy }); lastSent = s; }
+}
+
+/* ---------- INPUT ---------- */
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; readKeys(); if (e.key.startsWith('Arrow')) e.preventDefault(); });
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; readKeys(); });
+function readKeys() {
+  if (pointer) return;
+  input.dx = (keys['d']||keys['arrowright']?1:0) - (keys['a']||keys['arrowleft']?1:0);
+  input.dy = (keys['s']||keys['arrowdown']?1:0) - (keys['w']||keys['arrowup']?1:0);
+}
+const cv = $('cv'), ctx = cv.getContext('2d');
+function pointerVec(e) {
+  const r = cv.getBoundingClientRect(), sc = Math.min(r.width / W, r.height / H);
+  const ox = (r.width - W*sc) / 2, oy = (r.height - H*sc) / 2;
+  const me = state.p.find(p => p[0] === myId); if (!me) return;
+  const dx = (e.clientX - r.left - ox) / sc - me[1], dy = (e.clientY - r.top - oy) / sc - me[2];
+  const d = Math.hypot(dx, dy);
+  input.dx = d < 8 ? 0 : dx / d; input.dy = d < 8 ? 0 : dy / d;
+}
+cv.addEventListener('pointerdown', e => { pointer = true; pointerVec(e); });
+cv.addEventListener('pointermove', e => { if (pointer) pointerVec(e); });
+addEventListener('pointerup', () => { pointer = null; input.dx = input.dy = 0; readKeys(); });
+
+/* ---------- RENDER ---------- */
+function enterGame() {
+  $('lobby').style.display = 'none'; $('game').style.display = 'block';
+  $('room').innerHTML = 'Meadow code <b>' + roomCode + '</b><br><small>Move: WASD / arrows, or press and hold to glide</small>';
+  requestAnimationFrame(draw);
+}
+function draw(t) {
+  const dpr = devicePixelRatio || 1, cw = cv.clientWidth, ch = cv.clientHeight;
+  if (cv.width !== cw*dpr || cv.height !== ch*dpr) { cv.width = cw*dpr; cv.height = ch*dpr; }
+  const sc = Math.min(cw / W, ch / H);
+  ctx.setTransform(dpr*sc, 0, 0, dpr*sc, dpr*(cw - W*sc)/2, dpr*(ch - H*sc)/2);
+  ctx.clearRect(-2000, -2000, 5000, 5000);
+  ctx.strokeStyle = '#2f5a4f'; ctx.lineWidth = 2; ctx.strokeRect(0, 0, W, H);
+  for (const [x, y] of state.c) {
+    const pulse = 5 + Math.sin(t/300 + x) * 1.5;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, 16);
+    g.addColorStop(0, '#fffbe0'); g.addColorStop(.35, '#ffe98a'); g.addColorStop(1, 'rgba(255,233,138,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 16, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, pulse/2, 0, 7); ctx.fill();
+  }
+  for (const [id, x, y, color, nm] of state.p) {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, 30);
+    g.addColorStop(0, color); g.addColorStop(1, 'transparent');
+    ctx.globalAlpha = .45; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 30, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill();
+    if (id === myId) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 14, 0, 7); ctx.stroke(); }
+    ctx.fillStyle = '#e8f1ee'; ctx.font = '13px Georgia'; ctx.textAlign = 'center'; ctx.fillText(nm, x, y - 20);
+  }
+  if (state.msg) { ctx.fillStyle = '#ffc857'; ctx.font = 'italic 34px Georgia'; ctx.fillText(state.msg, W/2, H/2); }
+  const sorted = [...state.p].sort((a, b) => b[5] - a[5]);
+  $('board').innerHTML = sorted.map(p => `<div><span style="color:${p[3]}">${p[4].replace(/</g,'&lt;')}${p[0]===myId?' (you)':''}</span><b>${p[5]}</b></div>`).join('');
+  requestAnimationFrame(draw);
+}
+
+/* ---------- LOBBY ---------- */
+$('host').onclick = () => { err(''); startHost(); };
+$('join').onclick = () => { const c = $('code').value.trim().toUpperCase(); if (c.length !== 4) return err('Enter the 4-letter meadow code.'); err(''); joinGame(c); };
+</script>
+</body>
+</html>
