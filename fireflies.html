@@ -45,6 +45,8 @@ canvas{display:block;width:100%;height:100%;touch-action:none;background:radial-
 const W = 800, H = 500, PREFIX = 'firefly-meadow-', WIN = 15, SPEED = 230, TICK = 1000/30;
 const COLORS = ['#ffc857','#7bdff2','#f79ad3','#b8f28b','#ff9b6b','#c4a7ff','#fff2a8','#8bb5ff'];
 const $ = id => document.getElementById(id);
+const PEER_OPTS = { debug: 2, config: { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] } };
 let peer, isHost = false, myId = '', roomCode = '';
 let state = { p: [], c: [], msg: '' };            // what every client renders
 let players = {}, motes = [];                     // host-only authoritative data
@@ -61,12 +63,13 @@ const name = () => ($('name').value.trim() || 'Firefly').slice(0, 12);
 /* ---------- HOST ---------- */
 function startHost(tries = 0) {
   roomCode = makeCode();
-  peer = new Peer(PREFIX + roomCode);
+  peer = new Peer(PREFIX + roomCode, PEER_OPTS);
   peer.on('open', id => { myId = id; isHost = true; addPlayer(id, name()); spawnMotes(); enterGame(); setInterval(hostTick, TICK); });
   peer.on('error', e => {
     if (e.type === 'unavailable-id' && tries < 5) { peer.destroy(); startHost(tries + 1); }
     else err('Could not reach the PeerJS server: ' + e.type);
   });
+  peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
   peer.on('connection', c => {
     c.on('data', d => {
       if (d.t === 'hello') { conns[c.peer] = c; addPlayer(c.peer, String(d.name || 'Firefly').slice(0, 12)); }
@@ -103,16 +106,23 @@ function hostTick() {
 
 /* ---------- CLIENT ---------- */
 function joinGame(code) {
-  peer = new Peer();
+  let done = false, timer;
+  const fail = m => { if (done) return; done = true; clearTimeout(timer); err(m); try { peer.destroy(); } catch (e) {} };
+  peer = new Peer(undefined, PEER_OPTS);
   peer.on('open', id => {
     myId = id;
-    hostConn = peer.connect(PREFIX + code, { reliable: false });
-    const timeout = setTimeout(() => { err('No meadow found with that code.'); peer.destroy(); }, 8000);
-    hostConn.on('open', () => { clearTimeout(timeout); roomCode = code; hostConn.send({ t: 'hello', name: name() }); enterGame(); setInterval(sendInput, TICK); });
+    hostConn = peer.connect(PREFIX + code);
+    err('Connecting…');
+    timer = setTimeout(() => fail('Found the meadow, but the direct connection could not be made (a firewall, VPN or network may be blocking WebRTC). Try another network.'), 20000);
+    hostConn.on('open', () => {
+      if (done) return; done = true; clearTimeout(timer); err('');
+      roomCode = code; hostConn.send({ t: 'hello', name: name() }); enterGame(); setInterval(sendInput, TICK);
+    });
     hostConn.on('data', d => state = d);
-    hostConn.on('close', () => { alert('The host left the meadow.'); location.reload(); });
+    hostConn.on('error', e => fail('Connection error: ' + (e.type || e)));
+    hostConn.on('close', () => { if (done) { alert('The host left the meadow.'); location.reload(); } });
   });
-  peer.on('error', e => err(e.type === 'peer-unavailable' ? 'No meadow found with that code.' : 'Connection problem: ' + e.type));
+  peer.on('error', e => fail(e.type === 'peer-unavailable' ? 'No meadow with that code is online right now.' : 'Connection problem: ' + e.type));
 }
 let lastSent = '';
 function sendInput() {
