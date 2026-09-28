@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Firefly Meadow – PeerJS multiplayer</title>
+<title>Firefly Meadow – 3D / VR multiplayer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
 :root{--night:#0e1f2b;--moss:#1d3b34;--amber:#ffc857;--mint:#7bdff2;--text:#e8f1ee}
@@ -23,6 +24,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none;background:radial-
 #hud{position:fixed;top:0;left:0;right:0;padding:10px 14px;display:flex;justify-content:space-between;gap:12px;pointer-events:none;font-size:.9rem}
 #board{background:#0e1f2bcc;padding:8px 12px;border-radius:8px;min-width:150px}
 #board div{display:flex;justify-content:space-between;gap:16px}
+#vr{display:none;position:fixed;bottom:18px;left:50%;transform:translateX(-50%);width:auto;padding:12px 26px;z-index:5}
 #room b{color:var(--amber);letter-spacing:.2em;font-size:1.2rem}
 #room{background:#0e1f2bcc;padding:8px 12px;border-radius:8px}
 </style>
@@ -38,6 +40,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none;background:radial-
 </div>
 <div id="game">
   <canvas id="cv"></canvas>
+  <button id="vr">Enter VR</button>
   <div id="hud"><div id="room"></div><div id="board"></div></div>
 </div>
 
@@ -138,51 +141,133 @@ function readKeys() {
   input.dx = (keys['d']||keys['arrowright']?1:0) - (keys['a']||keys['arrowleft']?1:0);
   input.dy = (keys['s']||keys['arrowdown']?1:0) - (keys['w']||keys['arrowup']?1:0);
 }
-const cv = $('cv'), ctx = cv.getContext('2d');
-function pointerVec(e) {
-  const r = cv.getBoundingClientRect(), sc = Math.min(r.width / W, r.height / H);
-  const ox = (r.width - W*sc) / 2, oy = (r.height - H*sc) / 2;
-  const me = state.p.find(p => p[0] === myId); if (!me) return;
-  const dx = (e.clientX - r.left - ox) / sc - me[1], dy = (e.clientY - r.top - oy) / sc - me[2];
-  const d = Math.hypot(dx, dy);
+const cv = $('cv');
+const AW = 2.4, AH = 1.5, AY = 0.75, AZ = -1.2;            // arena is a 2.4 x 1.5 m tabletop
+const toX = x => (x / W - .5) * AW, toZ = y => (y / H - .5) * AH;
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.xr.enabled = true; renderer.xr.setReferenceSpaceType('local-floor');
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a1620); scene.fog = new THREE.Fog(0x0a1620, 5, 14);
+const camera = new THREE.PerspectiveCamera(50, 1, .05, 50);
+const arena = new THREE.Group(); arena.position.set(0, AY, AZ); scene.add(arena);
+
+const GLOW = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'), r = g.createRadialGradient(32,32,0,32,32,32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(.3, 'rgba(255,255,255,.5)'); r.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = r; g.fillRect(0,0,64,64); return new THREE.CanvasTexture(c); })();
+const glowOpts = col => ({ map: GLOW, color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+const glow = (col, s) => { const sp = new THREE.Sprite(new THREE.SpriteMaterial(glowOpts(col))); sp.scale.setScalar(s); return sp; };
+const pool = (col, s) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial(glowOpts(col))); m.rotation.x = -Math.PI / 2; m.position.y = -.098; return m; };
+function textSprite(t, color) { const c = document.createElement('canvas'); c.width = 256; c.height = 64; const g = c.getContext('2d');
+  g.font = 'italic 34px Georgia'; g.textAlign = 'center'; g.fillStyle = color; g.fillText(t, 128, 44);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })); s.scale.set(.3, .075, 1); return s; }
+
+// environment: slab, grid, floor, stars
+const box = new THREE.BoxGeometry(AW, .04, AH);
+const slab = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ color: 0x14302a })); slab.position.y = -.02; arena.add(slab);
+const edge = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({ color: 0xffc857 })); edge.position.y = -.02; arena.add(edge);
+const grid = new THREE.GridHelper(AW, 12, 0x2f5a4f, 0x1f4038); grid.scale.z = AH / AW; grid.position.y = .001; arena.add(grid);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(6, 48), new THREE.MeshBasicMaterial({ color: 0x0c1e1a })); floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const sp = []; for (let i = 0; i < 300; i++) { const a = Math.random() * 6.28, r = 5 + Math.random() * 4; sp.push(Math.cos(a) * r, 1 + Math.random() * 7, Math.sin(a) * r); }
+scene.add(new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)), new THREE.PointsMaterial({ color: 0xfff2a8, size: .05, fog: false })));
+
+// scoreboard floating behind the arena (readable in VR)
+const bc = document.createElement('canvas'); bc.width = 512; bc.height = 320; const bg = bc.getContext('2d'), btex = new THREE.CanvasTexture(bc);
+const board = new THREE.Mesh(new THREE.PlaneGeometry(.8, .5), new THREE.MeshBasicMaterial({ map: btex, transparent: true }));
+board.position.set(0, .32, -AH / 2 - .05); board.rotation.x = -.3; arena.add(board);
+let boardSig = '';
+function updateBoard() {
+  const sorted = [...state.p].sort((a, b) => b[5] - a[5]), sig = roomCode + JSON.stringify(sorted.map(p => [p[4], p[5]])) + state.msg;
+  if (sig === boardSig) return; boardSig = sig;
+  bg.clearRect(0, 0, 512, 320); bg.fillStyle = 'rgba(14,31,43,.85)'; bg.fillRect(0, 0, 512, 320);
+  bg.textAlign = 'left'; bg.fillStyle = '#ffc857'; bg.font = 'italic 34px Georgia'; bg.fillText('Meadow ' + roomCode, 20, 48);
+  sorted.slice(0, 6).forEach((p, i) => { bg.fillStyle = p[3]; bg.font = '28px Georgia'; bg.textAlign = 'left'; bg.fillText(p[4] + (p[0] === myId ? ' (you)' : ''), 20, 92 + i * 38); bg.textAlign = 'right'; bg.fillText(p[5], 492, 92 + i * 38); });
+  if (state.msg) { bg.fillStyle = '#ffc857'; bg.font = 'italic 30px Georgia'; bg.textAlign = 'center'; bg.fillText(state.msg, 256, 306); }
+  btex.needsUpdate = true;
+  $('board').innerHTML = sorted.map(p => `<div><span style="color:${p[3]}">${p[4].replace(/</g,'&lt;')}${p[0]===myId?' (you)':''}</span><b>${p[5]}</b></div>`).join('');
+}
+
+// players and motes
+const objs = {}, moteObjs = [];
+function makePlayer(id, color, nm) {
+  const g = new THREE.Group(), col = new THREE.Color(color);
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(.035, 16, 12), new THREE.MeshBasicMaterial({ color: col })));
+  g.add(glow(col, .3)); g.add(pool(col, .3));
+  const lab = textSprite(nm, '#e8f1ee'); lab.position.y = .11; g.add(lab);
+  if (id === myId) { const ring = new THREE.Mesh(new THREE.RingGeometry(.07, .08, 32), new THREE.MeshBasicMaterial({ color: 0xffffff })); ring.rotation.x = -Math.PI / 2; ring.position.y = -.096; g.add(ring); }
+  g.userData.ph = Math.random() * 6; return g;
+}
+function makeMote() {
+  const g = new THREE.Group(); g.add(new THREE.Mesh(new THREE.SphereGeometry(.018, 12, 8), new THREE.MeshBasicMaterial({ color: 0xfffbe0 })));
+  g.add(glow(0xffe98a, .16)); g.add(pool(0xffe98a, .16)); return g;
+}
+
+// camera framing for phones / flat screens
+function fitCamera() {
+  const w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (renderer.xr.isPresenting) return;
+  const t = Math.tan(camera.fov * Math.PI / 360), d = Math.max(.95 / t, 1.35 / (t * camera.aspect)) * 1.05, el = 55 * Math.PI / 180;
+  camera.position.set(0, AY + d * Math.sin(el), AZ + d * Math.cos(el)); camera.lookAt(0, AY, AZ);
+}
+addEventListener('resize', fitCamera);
+renderer.xr.addEventListener('sessionend', fitCamera);
+
+// aiming: screen touch (phone) or controller ray (VR) -> point on the arena in game units
+const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -AY), hitV = new THREE.Vector3();
+function steerFromRay() {
+  const me = state.p.find(p => p[0] === myId); if (!me || !ray.ray.intersectPlane(plane, hitV)) return;
+  arena.worldToLocal(hitV);
+  const dx = (hitV.x / AW + .5) * W - me[1], dy = (hitV.z / AH + .5) * H - me[2], d = Math.hypot(dx, dy);
   input.dx = d < 8 ? 0 : dx / d; input.dy = d < 8 ? 0 : dy / d;
 }
-cv.addEventListener('pointerdown', e => { pointer = true; pointerVec(e); });
-cv.addEventListener('pointermove', e => { if (pointer) pointerVec(e); });
+function pointerAim(e) {
+  const r = cv.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera); steerFromRay();
+}
+cv.addEventListener('pointerdown', e => { pointer = true; pointerAim(e); });
+cv.addEventListener('pointermove', e => { if (pointer) pointerAim(e); });
 addEventListener('pointerup', () => { pointer = null; input.dx = input.dy = 0; readKeys(); });
 
-/* ---------- RENDER ---------- */
+const ctrls = [0, 1].map(i => {
+  const c = renderer.xr.getController(i);
+  c.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1.2)]), new THREE.LineBasicMaterial({ color: 0x7bdff2 })));
+  c.addEventListener('selectstart', () => c.userData.sel = true); c.addEventListener('selectend', () => c.userData.sel = false);
+  scene.add(c); return c;
+});
+const _o = new THREE.Vector3(), _d = new THREE.Vector3(), _q = new THREE.Quaternion();
+function xrInput() {
+  const s = renderer.xr.getSession(); if (!s) return;
+  let ax = 0, ay = 0;
+  for (const src of s.inputSources) { const a = src.gamepad && src.gamepad.axes; if (a && a.length >= 4 && Math.hypot(a[2], a[3]) > .2) { ax = a[2]; ay = a[3]; } }
+  if (ax || ay) { input.dx = ax; input.dy = ay; return; }              // thumbstick: push forward = away from you
+  const c = ctrls.find(c => c.userData.sel);
+  if (c) { c.getWorldPosition(_o); _d.set(0, 0, -1).applyQuaternion(c.getWorldQuaternion(_q)); ray.set(_o, _d); steerFromRay(); }
+  else input.dx = input.dy = 0;                                        // hold trigger: glide toward where you point
+}
+
+// main loop
+let last = 0;
+function render(t) {
+  const dt = Math.min(.1, (t - last) / 1000 || .016), k = Math.min(1, dt * 15), seen = {}; last = t;
+  if (renderer.xr.isPresenting) xrInput();
+  for (const [id, x, y, color, nm] of state.p) {
+    seen[id] = 1; let o = objs[id];
+    if (!o) { o = objs[id] = makePlayer(id, color, nm); o.position.set(toX(x), .1, toZ(y)); arena.add(o); }
+    o.position.x += (toX(x) - o.position.x) * k; o.position.z += (toZ(y) - o.position.z) * k; o.position.y = .1 + Math.sin(t / 400 + o.userData.ph) * .008;
+  }
+  for (const id in objs) if (!seen[id]) { arena.remove(objs[id]); delete objs[id]; }
+  while (moteObjs.length < state.c.length) { const m = makeMote(); moteObjs.push(m); arena.add(m); }
+  moteObjs.forEach((m, i) => { const c = state.c[i]; m.visible = !!c; if (c) m.position.set(toX(c[0]), .1 + Math.sin(t / 300 + i) * .015, toZ(c[1])); });
+  updateBoard(); renderer.render(scene, camera);
+}
 function enterGame() {
   $('lobby').style.display = 'none'; $('game').style.display = 'block';
-  $('room').innerHTML = 'Meadow code <b>' + roomCode + '</b><br><small>Move: WASD / arrows, or press and hold to glide</small>';
-  requestAnimationFrame(draw);
-}
-function draw(t) {
-  const dpr = devicePixelRatio || 1, cw = cv.clientWidth, ch = cv.clientHeight;
-  if (cv.width !== cw*dpr || cv.height !== ch*dpr) { cv.width = cw*dpr; cv.height = ch*dpr; }
-  const sc = Math.min(cw / W, ch / H);
-  ctx.setTransform(dpr*sc, 0, 0, dpr*sc, dpr*(cw - W*sc)/2, dpr*(ch - H*sc)/2);
-  ctx.clearRect(-2000, -2000, 5000, 5000);
-  ctx.strokeStyle = '#2f5a4f'; ctx.lineWidth = 2; ctx.strokeRect(0, 0, W, H);
-  for (const [x, y] of state.c) {
-    const pulse = 5 + Math.sin(t/300 + x) * 1.5;
-    const g = ctx.createRadialGradient(x, y, 0, x, y, 16);
-    g.addColorStop(0, '#fffbe0'); g.addColorStop(.35, '#ffe98a'); g.addColorStop(1, 'rgba(255,233,138,0)');
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 16, 0, 7); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, pulse/2, 0, 7); ctx.fill();
-  }
-  for (const [id, x, y, color, nm] of state.p) {
-    const g = ctx.createRadialGradient(x, y, 0, x, y, 30);
-    g.addColorStop(0, color); g.addColorStop(1, 'transparent');
-    ctx.globalAlpha = .45; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 30, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
-    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill();
-    if (id === myId) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 14, 0, 7); ctx.stroke(); }
-    ctx.fillStyle = '#e8f1ee'; ctx.font = '13px Georgia'; ctx.textAlign = 'center'; ctx.fillText(nm, x, y - 20);
-  }
-  if (state.msg) { ctx.fillStyle = '#ffc857'; ctx.font = 'italic 34px Georgia'; ctx.fillText(state.msg, W/2, H/2); }
-  const sorted = [...state.p].sort((a, b) => b[5] - a[5]);
-  $('board').innerHTML = sorted.map(p => `<div><span style="color:${p[3]}">${p[4].replace(/</g,'&lt;')}${p[0]===myId?' (you)':''}</span><b>${p[5]}</b></div>`).join('');
-  requestAnimationFrame(draw);
+  $('room').innerHTML = 'Meadow code <b>' + roomCode + '</b><br><small>WASD / arrows, or press and hold to glide.<br>VR: thumbstick, or hold trigger to glide toward your ray.</small>';
+  fitCamera(); renderer.setAnimationLoop(render);
+  if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => {
+    if (!ok) return; const b = $('vr'); b.style.display = 'block';
+    b.onclick = () => navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] })
+      .then(s => renderer.xr.setSession(s)).catch(e => alert('Could not start VR: ' + e.message));
+  });
 }
 
 /* ---------- LOBBY ---------- */
