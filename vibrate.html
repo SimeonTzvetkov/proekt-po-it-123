@@ -1,0 +1,42 @@
+<html>
+<head>
+<script>
+
+	
+function vibrateTimestamps(timestamps) {
+console.log(123);
+  const pattern = [];
+  let previousEnd = 0;
+
+  for (const [start, end] of timestamps) {
+    const pause = Math.round((start - previousEnd) * 1000);
+    const duration = Math.round((end - start) * 1000);
+
+    if (pause > 0) pattern.push(pause);
+    pattern.push(duration);
+
+    previousEnd = end;
+  }
+
+  return navigator.vibrate(pattern);
+}
+
+const timestamps = [
+  [10.255, 12.385],
+  [12.980, 14.935],
+  [15.562, 17.519],
+  [18.145, 19.220],
+  [19.433, 19.970],
+  [20.715, 22.699],
+  [23.304, 25.260],
+  [25.885, 27.840],
+  [28.466, 29.745]
+];
+</script>
+</head>
+<body>
+ <button onclick="vibrateTimestamps(timestamps)">Vibr</button>
+
+</body>
+
+</html>
