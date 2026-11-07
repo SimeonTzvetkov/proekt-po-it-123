@@ -33,6 +33,10 @@
   #count { font-weight:700; font-size:1.4rem; }
   #status { min-height:1.5em; }
   /* phone light */
+  video.blackout { filter: brightness(0); }
+  #clip { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; background:#000; display:none; visibility:hidden; pointer-events:none; z-index:11; }
+  body.running #clip { display:block; }
+  body.running #clip.on { visibility:visible; }
   #light { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; display:none; z-index:10; forced-color-adjust:none; }
   body.running #light { display:block; }
   body.running .wrap { visibility:hidden; }
@@ -42,6 +46,7 @@
 </head>
 <body>
 <canvas id="light" width="1" height="1"></canvas>
+<video id="clip" muted playsinline preload="auto" disablepictureinpicture></video>
 <div class="wrap" id="app"></div>
 
 <script>
@@ -73,6 +78,11 @@ const TIMESTAMPS = [
 ];
 const FLASH_MS = 50;      // full brightness
 const FADE_MS  = 1950;    // then fade to black
+const FPS = 24;
+const CLIP_START = 4461 / FPS;   // 185.875 s: the video frame where the fire clip starts
+const CLIP_DUR   = 496 / FPS;    // 20.667 s
+const CLIP_WIDTHS = [1366, 1440, 1600, 1920];
+const CLIP_SRC = 'vid/fire-' + (CLIP_WIDTHS.includes(screen.width) ? screen.width : 1920) + '.mp4'; // relative path works on GitHub project pages
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
 
@@ -123,6 +133,8 @@ function startCoordinator() {
   // Record an estimate only when currentTime actually changed and use the minimum of the recent ones.
   let est = [], lastCT = -1;
   (function tick() {
+    const ct = audio.currentTime;
+    audio.classList.toggle('blackout', ct >= CLIP_START - 0.0005 && ct < CLIP_START + CLIP_DUR);
     if (audio.paused) { est = []; lastCT = -1; }
     else if (audio.currentTime !== lastCT) {
       lastCT = audio.currentTime; est.push(rawT0());
@@ -181,6 +193,24 @@ function startPhone(roomId) {
     </div>`;
   const status = (t, ok) => { const s = $('#status'); s.textContent = t; s.style.color = ok ? 'var(--ok)' : ''; };
   const light = $('#light'), ctx = light.getContext('2d');
+  const clip = $('#clip');
+  clip.muted = true; clip.src = CLIP_SRC; clip.load();
+  function updateClip(t) {
+    const ct = t === null ? -1 : t - CLIP_START;
+    if (ct >= 0 && ct < CLIP_DUR) {
+      clip.classList.add('on');
+      if (clip.paused) { clip.currentTime = ct; clip.play().catch(() => {}); }
+      else if (!clip.seeking) {
+        const diff = ct - clip.currentTime;                 // >0: video is behind
+        if (Math.abs(diff) > 0.4) clip.currentTime = ct;    // big error: jump
+        else clip.playbackRate = Math.abs(diff) < 0.03 ? 1 : 1 + Math.max(-0.1, Math.min(0.1, diff)); // small error: gently speed up/slow down
+      }
+    } else {
+      clip.classList.remove('on');
+      if (!clip.paused) clip.pause();
+      if (clip.currentTime !== 0 && !clip.seeking) { clip.currentTime = 0; clip.playbackRate = 1; }
+    }
+  }
 
   let cfg = { timestamps: TIMESTAMPS, flash: FLASH_MS, fade: FADE_MS, delay: 0 };
   let offset = 0;                 // hostTime = localTime + offset
@@ -250,6 +280,7 @@ function startPhone(roomId) {
   const env = (ageMs) => ageMs < 0 ? 0 : ageMs < cfg.flash ? 1 : ageMs < cfg.flash + cfg.fade ? 1 - (ageMs - cfg.flash) / cfg.fade : 0;
 
   function frame() {
+    updateClip(T0 !== null && synced() ? mediaTime() : null);
     let b = 0;
     if (T0 !== null && synced()) {
       const t = mediaTime();
@@ -275,6 +306,7 @@ function startPhone(roomId) {
     const el = document.documentElement;
     try { await (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {}
     if (navigator.vibrate) navigator.vibrate(1);        // user-gesture unlock for vibration
+    clip.play().then(() => { clip.pause(); clip.currentTime = 0; }).catch(() => {}); // unlock + preload the clip
     try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
     document.body.classList.add('running');
   });
