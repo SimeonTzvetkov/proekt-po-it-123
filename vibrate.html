@@ -1,27 +1,9 @@
 <html>
 <head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script>
 
 	
-function vibrateTimestamps(timestamps) {
-console.log(234);
-  const timers = [];
-
-  timestamps.forEach(([start, end]) => {
-    const delay = Math.round(start * 1000);
-    const duration = Math.round((end - start) * 1000);
-
-    timers.push(setTimeout(() => {
-      navigator.vibrate(duration);
-    }, delay));
-  });
-
-  return () => {
-    timers.forEach(clearTimeout);
-    navigator.vibrate(0);
-  };
-}
-
 const timestamps = [
   [10.255, 12.385],
   [12.980, 14.935],
@@ -34,11 +16,29 @@ const timestamps = [
   [28.466, 29.745]
 ];
 
-const stopVibration = vibrateTimestamps(timestamps);
+function vibrateTimestamps(timestamps) {
+  const pattern = [1];
+
+  let previousEnd = 0;
+
+  for (const [start, end] of timestamps) {
+    const pause = Math.round((start - previousEnd) * 1000);
+    const duration = Math.round((end - start) * 1000);
+
+    pattern.push(Math.max(0, pause - (previousEnd === 0 ? 1 : 0)));
+    pattern.push(duration);
+
+    previousEnd = end;
+  }
+  console.log(pattern);
+
+  return navigator.vibrate(pattern);
+}
+
 </script>
 </head>
 <body>
- <button onclick="vibrateTimestamps(timestamps)">Vibr</button>
+ <button onclick="vibrateTimestamps(timestamps)">Vibrate</button>
 
 </body>
 
