@@ -5,7 +5,7 @@
 <meta name="color-scheme" content="light only">
 <meta name="supported-color-schemes" content="light">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Phone Light Show</title>
+<title>Phone Light Show#</title>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
@@ -78,6 +78,12 @@ const TIMESTAMPS = [
 ];
 const FLASH_MS = 50;      // full brightness
 const FADE_MS  = 1950;    // then fade to black
+// Extra quick white flashes: 120 ms fade-in -> 50 ms peak -> 450 ms fade-out.
+// Times are where the PEAK starts, snapped to the transients found in song.opus (93 BPM, one beat = 0.645 s).
+// Your original times were: 123.990, 124.600, 125.270, 125.950, 126.600, 127.250, 127.900
+const FLASH_PEAKS = [123.904, 124.551, 125.205, 125.850, 126.502, 127.145, 127.790];
+const FL_IN = 0.120, FL_PEAK = 0.050, FL_OUT = 0.450;
+const quickFlash = (a) => a < -FL_IN ? 0 : a < 0 ? 1 + a / FL_IN : a < FL_PEAK ? 1 : a < FL_PEAK + FL_OUT ? 1 - (a - FL_PEAK) / FL_OUT : 0;
 const FPS = 24;
 const CLIP_START = 4461 / FPS;   // 185.875 s: the video frame where the fire clip starts
 const CLIP_DUR   = 496 / FPS;    // 20.667 s
@@ -150,7 +156,7 @@ function startCoordinator() {
   })();
   const T0 = () => est.length >= 5 ? Math.min(...est) : rawT0();
   const state = () => ({ type: 'state', playing: !audio.paused && !audio.ended, T0: T0() });
-  const config = () => ({ type: 'config', timestamps: TIMESTAMPS, flash: FLASH_MS, fade: FADE_MS, delay });
+  const config = () => ({ type: 'config', timestamps: TIMESTAMPS, flash: FLASH_MS, fade: FADE_MS, delay, flashes: FLASH_PEAKS });
 
   peer.on('connection', (c) => {
     c.on('open', () => {
@@ -344,6 +350,7 @@ function startPhone(roomId) {
         }
       });
       if (last >= 0) b = env((t - last) * 1000);        // brightness is a pure function of media time
+      for (const pk of (cfg.flashes || FLASH_PEAKS)) b = Math.max(b, quickFlash(t - pk));
     }
     b = Math.max(b, env(performance.now() - testStart));
     const v = Math.round(b * 255);
