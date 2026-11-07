@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Phone Light Show</title>
+<title>Phone Light Show1</title>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
-  :root { --bg:#0e0f13; --panel:#181a21; --line:#2b2e39; --text:#eceef4; --dim:#8b90a0; --accent:#fff; --ok:#6ee7a0; --bad:#ff7a7a; }
+  :root { color-scheme: light only; --bg:#0e0f13; --panel:#181a21; --line:#2b2e39; --text:#eceef4; --dim:#8b90a0; --accent:#fff; --ok:#6ee7a0; --bad:#ff7a7a; }
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
     font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -31,7 +33,7 @@
   #count { font-weight:700; font-size:1.4rem; }
   #status { min-height:1.5em; }
   /* phone light */
-  #light { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; display:none; z-index:10; }
+  #light { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; display:none; z-index:10; forced-color-adjust:none; }
   body.running #light { display:block; }
   body.running .wrap { visibility:hidden; }
   body.running { background:#000; }
@@ -39,7 +41,7 @@
 </style>
 </head>
 <body>
-<div id="light"></div>
+<canvas id="light" width="1" height="1"></canvas>
 <div class="wrap" id="app"></div>
 
 <script>
@@ -141,7 +143,7 @@ function startPhone(roomId) {
     <button class="big" id="go">Go fullscreen &amp; start</button>
     <p id="status" class="dim">Connecting…</p>`;
   const status = (t, ok) => { const s = $('#status'); s.textContent = t; s.style.color = ok ? 'var(--ok)' : ''; };
-  const light = $('#light');
+  const light = $('#light'), ctx = light.getContext('2d');
 
   let cfg = { timestamps: TIMESTAMPS, flash: FLASH_MS, fade: FADE_MS, delay: 0 };
   let offset = 0, bestRtt = Infinity;   // hostTime = localTime + offset
@@ -208,7 +210,9 @@ function startPhone(roomId) {
     const age = performance.now() - flashStart;
     let b = 0;
     if (age >= 0 && age < cfg.flash + cfg.fade) b = age < cfg.flash ? 1 : 1 - (age - cfg.flash) / cfg.fade;
-    light.style.opacity = b;
+    const v = Math.round(b * 255);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(0, 0, 1, 1);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
