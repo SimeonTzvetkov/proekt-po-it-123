@@ -5,7 +5,7 @@
 <meta name="color-scheme" content="light only">
 <meta name="supported-color-schemes" content="light">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Phone Light Show#</title>
+<title>Phone Light Show</title>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
@@ -85,13 +85,79 @@ const FLASH_PEAKS = [
   123.904, 124.551, 125.205, 125.850, 126.502, 127.145, 127.790,   // 2:03-2:08
   134.228, 134.836, 135.486, 136.154, 136.823, 137.433, 138.050    // 2:14-2:18 (bridge)
 ];
-const FLASH_CHANCE = 1;                 // every device flips a coin per flash: ~half the phones flash each time
+const FLASH_CHANCE = 0.5;                 // every device flips a coin per flash: ~half the phones flash each time
 const FLASH_BLUE = [80, 165, 215];        // calm watery blue, picked from the video's teal/blue palette
 // flashes 1-2 white, 3-4 transitional (1/3 and 2/3 of the way), 5 onwards full blue
 const FLASH_COLORS = FLASH_PEAKS.map((_, i) => {
   const k = i < 2 ? 0 : i < 4 ? (i - 1) / 3 : 1;
   return [0, 1, 2].map((c) => Math.round(255 + (FLASH_BLUE[c] - 255) * k));
 });
+
+/* ---- Chaotic lights for the two dynamic parts ---- */
+const CHAOS_SECTIONS = [          // [start, end, fade-out end]
+  [95.561, 112.330, 112.620],     // 1:35.561 - 1:52.330
+  [113.620, 122.665, 122.950]     // 1:53.620 - 2:02.665
+];
+// Hits detected in the audio (kick/snare/hats merged): [time, weight 1 = weak, 2 = medium, 3 = strong]
+const CHAOS_HITS = [
+  [95.561,3], [95.689,1], [95.782,1], [95.898,1], [96.007,3], [96.096,1], [96.194,2], [96.310,1],
+  [96.495,3], [96.620,2], [96.802,3], [96.972,1], [97.143,3], [97.299,2], [97.373,1], [97.466,3],
+  [97.605,1], [97.657,1], [97.802,1], [97.948,3], [98.117,3], [98.307,1], [98.365,1], [98.423,1],
+  [98.487,1], [98.594,3], [98.766,1], [98.923,1], [99.064,3], [99.161,1], [99.216,1], [99.312,1],
+  [99.385,2], [99.480,1], [99.581,3], [99.738,3], [99.880,1], [99.938,1], [100.040,2], [100.184,3],
+  [100.352,2], [100.515,3], [100.699,3], [100.834,1], [100.990,2], [101.161,3], [101.233,1], [101.314,1],
+  [101.372,1], [101.494,1], [101.593,1], [101.671,3], [101.809,3], [101.889,1], [101.982,3], [102.152,2],
+  [102.284,1], [102.380,1], [102.539,1], [102.631,3], [102.789,1], [102.870,1], [102.971,1], [103.071,2],
+  [103.251,3], [103.323,1], [103.398,1], [103.497,1], [103.613,1], [103.756,3], [103.929,1], [104.112,1],
+  [104.233,3], [104.327,1], [104.396,2], [104.560,2], [104.736,2], [104.883,3], [105.041,1], [105.106,1],
+  [105.202,3], [105.360,1], [105.519,2], [105.699,2], [105.849,3], [106.011,2], [106.080,1], [106.214,1],
+  [106.335,3], [106.429,2], [106.540,1], [106.677,2], [106.816,3], [106.996,2], [107.089,2], [107.148,1],
+  [107.369,1], [107.467,3], [107.601,2], [107.677,1], [107.776,3], [107.851,1], [107.944,1], [108.108,2],
+  [108.164,1], [108.243,3], [108.438,3], [108.541,1], [108.678,2], [108.812,2], [108.911,3], [109.062,2],
+  [109.180,1], [109.232,1], [109.285,1], [109.395,2], [109.453,1], [109.546,2], [109.770,1], [109.892,2],
+  [110.037,2], [110.231,1], [110.372,3], [110.469,1], [110.527,1], [110.701,1], [110.840,1], [110.939,1],
+  [111.018,3], [111.164,2], [111.272,2], [111.374,2], [111.505,3], [111.612,1], [111.674,3], [111.802,2],
+  [111.948,3], [112.114,1], [112.216,1], [112.340,1], [113.620,3], [113.713,1], [113.847,1], [113.936,2],
+  [114.074,3], [114.183,2], [114.372,2], [114.551,3], [114.651,2], [114.753,1], [114.892,2], [115.017,3],
+  [115.113,1], [115.196,3], [115.353,2], [115.529,3], [115.653,2], [115.769,1], [115.850,1], [115.920,1],
+  [116.007,1], [116.084,2], [116.184,3], [116.285,1], [116.383,2], [116.496,2], [116.599,1], [116.673,3],
+  [116.792,2], [116.895,1], [116.982,2], [117.139,3], [117.237,1], [117.301,2], [117.377,1], [117.495,2],
+  [117.639,1], [117.787,3], [117.899,1], [118.009,1], [118.125,3], [118.242,1], [118.320,2], [118.436,2],
+  [118.599,2], [118.761,3], [118.845,1], [118.944,1], [119.056,2], [119.238,3], [119.414,1], [119.578,3],
+  [119.721,3], [119.844,1], [119.911,1], [119.995,1], [120.104,3], [120.233,3], [120.378,3], [120.476,2],
+  [120.682,3], [120.804,2], [120.947,1], [121.031,2], [121.227,3], [121.332,2], [121.404,2], [121.531,2],
+  [121.661,2], [121.827,3], [121.945,2], [122.055,1], [122.146,2], [122.288,3], [122.447,2], [122.613,2]
+];
+const CHAOS_PROB = [0, 0.35, 0.55, 0.85];    // chance that a device reacts to a hit of weight 1 / 2 / 3
+const CHAOS_STUTTER = 0.2;                    // chance of a quick double-flash after a hit
+const CHAOS_SPARKS_PER_SEC = 3;               // extra random strobes that are not on any beat
+const CHAOS_COLORS = [                        // r, g, b, weight
+  [255, 255, 255, 4], [80, 165, 215, 3], [150, 120, 255, 1.5], [255, 90, 170, 1.5]
+];
+// Every device builds its own random pattern (so no two phones are alike) each time the song starts or is sought.
+function buildChaos() {
+  const total = CHAOS_COLORS.reduce((a, c) => a + c[3], 0);
+  const pick = () => { let r = Math.random() * total; for (const c of CHAOS_COLORS) if ((r -= c[3]) < 0) return c; return CHAOS_COLORS[0]; };
+  const ev = [];
+  for (const [t, w] of CHAOS_HITS) {
+    if (Math.random() > CHAOS_PROB[w]) continue;
+    const d = (60 + Math.random() * 80 + w * 35) / 1000, p = 0.55 + Math.random() * 0.45;
+    ev.push({ t, d, p, c: pick() });
+    if (Math.random() < CHAOS_STUTTER) ev.push({ t: t + 0.06 + Math.random() * 0.04, d: d * 0.7, p: p * 0.8, c: pick() });
+  }
+  for (const [s0, s1] of CHAOS_SECTIONS) {
+    const n = Math.round((s1 - s0) * CHAOS_SPARKS_PER_SEC);
+    for (let i = 0; i < n; i++) ev.push({ t: s0 + Math.random() * (s1 - s0), d: 0.03 + Math.random() * 0.04, p: 0.4 + Math.random() * 0.6, c: pick() });
+  }
+  return ev;
+}
+function chaosMask(t) {                      // 1 inside a section, linear fade-out afterwards, 0 elsewhere
+  for (const [s0, s1, fe] of CHAOS_SECTIONS) {
+    if (t >= s0 && t <= s1) return 1;
+    if (t > s1 && t < fe) return (fe - t) / (fe - s1);
+  }
+  return 0;
+}
 const FL_IN = 0.120, FL_PEAK = 0.050, FL_OUT = 0.450;
 const quickFlash = (a) => a < -FL_IN ? 0 : a < 0 ? 1 + a / FL_IN : a < FL_PEAK ? 1 : a < FL_PEAK + FL_OUT ? 1 - (a - FL_PEAK) / FL_OUT : 0;
 const FPS = 24;
@@ -242,8 +308,8 @@ function startPhone(roomId) {
   let T0 = null;                  // host-clock time at which media time was 0
   let fired = new Set();          // cues whose vibration was already triggered
   let testStart = -1e9;
-  let flashOn = [];
-  const rollFlashes = () => { flashOn = FLASH_PEAKS.map(() => Math.random() < FLASH_CHANCE); };
+  let flashOn = [], chaos = [];
+  const rollFlashes = () => { flashOn = FLASH_PEAKS.map(() => Math.random() < FLASH_CHANCE); chaos = buildChaos(); };
   rollFlashes();
   let conn = null, wakeLock = null;
   let trim = 0;
@@ -368,6 +434,13 @@ function startPhone(roomId) {
         const f = quickFlash(t - pk);
         if (f > b) { b = f; col = FLASH_COLORS[i]; }   // brightest effect decides the colour
       });
+      const cm = chaosMask(t);
+      if (cm > 0) for (const e of chaos) {
+        const a = t - e.t;
+        if (a < 0 || a > e.d) continue;
+        const f = e.p * cm * (1 - a / e.d) ** 2;
+        if (f > b) { b = f; col = e.c; }
+      }
     }
     const tf = env(performance.now() - testStart);
     if (tf > b) { b = tf; col = [255, 255, 255]; }
