@@ -5,7 +5,7 @@
 <meta name="color-scheme" content="light only">
 <meta name="supported-color-schemes" content="light">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Phone Light Show#1</title>
+<title>Phone Light Show#</title>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
@@ -83,13 +83,13 @@ const FADE_MS  = 1950;    // then fade to black
 // Your original times were: 123.990, 124.600, 125.270, 125.950, 126.600, 127.250, 127.900
 const FLASH_PEAKS = [
   123.904, 124.551, 125.205, 125.850, 126.502, 127.145, 127.790,   // 2:03-2:08
-  134.228, 135.211, 135.855, 136.340, 136.800, 137.790, 138.436    // 2:14-2:18 (bridge)
+  134.228, 134.836, 135.486, 136.154, 136.823, 137.433, 138.050    // 2:14-2:18 (bridge)
 ];
 const FLASH_CHANCE = 1;                 // every device flips a coin per flash: ~half the phones flash each time
-const FLASH_WHITE_COUNT = 3;              // first 3 flashes are pure white...
-const FLASH_BLUE = [80, 165, 215];        // ...then they drift to this calm watery blue (picked from the video's teal/blue palette)
+const FLASH_BLUE = [80, 165, 215];        // calm watery blue, picked from the video's teal/blue palette
+// flashes 1-2 white, 3-4 transitional (1/3 and 2/3 of the way), 5 onwards full blue
 const FLASH_COLORS = FLASH_PEAKS.map((_, i) => {
-  const k = i < FLASH_WHITE_COUNT ? 0 : (i - FLASH_WHITE_COUNT + 1) / (FLASH_PEAKS.length - FLASH_WHITE_COUNT);
+  const k = i < 2 ? 0 : i < 4 ? (i - 1) / 3 : 1;
   return [0, 1, 2].map((c) => Math.round(255 + (FLASH_BLUE[c] - 255) * k));
 });
 const FL_IN = 0.120, FL_PEAK = 0.050, FL_OUT = 0.450;
