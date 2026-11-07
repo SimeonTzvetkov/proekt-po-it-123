@@ -24,7 +24,7 @@
   button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
   button:focus-visible, input:focus-visible { outline:2px solid #7cb7ff; outline-offset:2px; }
   .big { width:100%; padding:20px; font-size:1.2rem; }
-  video { width:100%; max-height:55vh; margin-top:12px; background:#000; border-radius:8px; }
+  #audio { width:100%; max-height:55vh; margin-top:12px; background:#000; border-radius:8px; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .dim { color:var(--dim); }
   #qr { background:#fff; padding:10px; border-radius:8px; display:inline-block; }
@@ -83,6 +83,12 @@ const CLIP_START = 4461 / FPS;   // 185.875 s: the video frame where the fire cl
 const CLIP_DUR   = 496 / FPS;    // 20.667 s
 const CLIP_WIDTHS = [1366, 1440, 1600, 1920];
 const CLIP_SRC = 'vid/fire-' + (CLIP_WIDTHS.includes(screen.width) ? screen.width : 1920) + '.mp4'; // relative path works on GitHub project pages
+const FW = 45, FH = 96;          // low-res canvas; fire is drawn here and scaled to the full screen
+const deviceParam = new URLSearchParams(location.search).get('device'); // ?device=pc or ?device=phone to test
+const IS_COMPUTER = deviceParam ? deviceParam === 'pc' :
+  !(/Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent) ||
+    (navigator.userAgentData && navigator.userAgentData.mobile) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
 
@@ -194,8 +200,10 @@ function startPhone(roomId) {
   const status = (t, ok) => { const s = $('#status'); s.textContent = t; s.style.color = ok ? 'var(--ok)' : ''; };
   const light = $('#light'), ctx = light.getContext('2d');
   const clip = $('#clip');
-  clip.muted = true; clip.src = CLIP_SRC; clip.load();
+  light.width = FW; light.height = FH;
+  if (IS_COMPUTER) { clip.muted = true; clip.src = CLIP_SRC; clip.load(); }
   function updateClip(t) {
+    if (!IS_COMPUTER) return;
     const ct = t === null ? -1 : t - CLIP_START;
     if (ct >= 0 && ct < CLIP_DUR) {
       clip.classList.add('on');
@@ -279,8 +287,51 @@ function startPhone(roomId) {
   const mediaTime = () => (performance.now() + offset - T0 - cfg.delay - trim) / 1000;
   const env = (ageMs) => ageMs < 0 ? 0 : ageMs < cfg.flash ? 1 : ageMs < cfg.flash + cfg.fade ? 1 - (ageMs - cfg.flash) / cfg.fade : 0;
 
+  /* --- fire (phones): classic "Doom fire" heat grid, different on every device, only start/end are shared --- */
+  const heat = new Uint8Array(FW * FH);
+  const img = ctx.createImageData(FW, FH);
+  const pal = [];
+  for (let i = 0; i <= 36; i++) {
+    const f = i / 36, c = (x) => Math.max(0, Math.min(255, Math.round(x)));
+    pal.push([c(f * 3 * 255), c((f - 0.33) * 3 * 255), c((f - 0.72) * 3.5 * 255)]);
+  }
+  let fireActive = false, fireAcc = 0, fireLast = 0;
+  function fireStep(src) {
+    for (let x = 0; x < FW; x++) heat[(FH - 1) * FW + x] = src;
+    for (let y = 1; y < FH; y++) for (let x = 0; x < FW; x++) {
+      const i = y * FW + x, v = heat[i];
+      if (!v) { heat[i - FW] = 0; continue; }
+      const r = (Math.random() * 3) | 0;
+      heat[i - r + 1 - FW] = v - (r & 1);
+    }
+  }
+  function drawFire(ft) {                               // ft = seconds since the fire started
+    const now = performance.now();
+    if (!fireActive) {
+      fireActive = true; fireLast = now; heat.fill(0);
+      if (ft < 0.5 && navigator.vibrate) {              // random crackle for the duration of the fire
+        const pat = []; let sum = 0, total = (CLIP_DUR - ft) * 1000;
+        while (sum < total) { const on = 20 + Math.random() * 90, off = 40 + Math.random() * 180; pat.push(Math.round(on), Math.round(off)); sum += on + off; }
+        navigator.vibrate(pat);
+      }
+    }
+    fireAcc += now - fireLast; fireLast = now;
+    const env = Math.min(1, ft / 1.5) * Math.min(1, (CLIP_DUR - ft) / 3);  // fade in 1.5 s, die down over the last 3 s
+    while (fireAcc >= 33) { fireAcc -= 33; fireStep(Math.round(36 * env)); }
+    const d = img.data;
+    for (let i = 0; i < heat.length; i++) { const c = pal[heat[i]], o = i * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
+    ctx.putImageData(img, 0, 0);
+  }
+
   function frame() {
-    updateClip(T0 !== null && synced() ? mediaTime() : null);
+    const tNow = T0 !== null && synced() ? mediaTime() : null;
+    updateClip(tNow);
+    if (!IS_COMPUTER && tNow !== null && tNow >= CLIP_START && tNow < CLIP_START + CLIP_DUR) {
+      drawFire(tNow - CLIP_START);
+      requestAnimationFrame(frame);
+      return;
+    }
+    fireActive = false;
     let b = 0;
     if (T0 !== null && synced()) {
       const t = mediaTime();
@@ -297,7 +348,7 @@ function startPhone(roomId) {
     b = Math.max(b, env(performance.now() - testStart));
     const v = Math.round(b * 255);
     ctx.fillStyle = `rgb(${v},${v},${v})`;
-    ctx.fillRect(0, 0, 1, 1);
+    ctx.fillRect(0, 0, FW, FH);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -306,7 +357,7 @@ function startPhone(roomId) {
     const el = document.documentElement;
     try { await (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {}
     if (navigator.vibrate) navigator.vibrate(1);        // user-gesture unlock for vibration
-    clip.play().then(() => { clip.pause(); clip.currentTime = 0; }).catch(() => {}); // unlock + preload the clip
+    if (IS_COMPUTER) clip.play().then(() => { clip.pause(); clip.currentTime = 0; }).catch(() => {}); // unlock + preload the clip
     try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
     document.body.classList.add('running');
   });
