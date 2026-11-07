@@ -4,21 +4,22 @@
 
 	
 function vibrateTimestamps(timestamps) {
-console.log(123);
-  const pattern = [];
-  let previousEnd = 0;
+console.log(234);
+  const timers = [];
 
-  for (const [start, end] of timestamps) {
-    const pause = Math.round((start - previousEnd) * 1000);
+  timestamps.forEach(([start, end]) => {
+    const delay = Math.round(start * 1000);
     const duration = Math.round((end - start) * 1000);
 
-    if (pause > 0) pattern.push(pause);
-    pattern.push(duration);
+    timers.push(setTimeout(() => {
+      navigator.vibrate(duration);
+    }, delay));
+  });
 
-    previousEnd = end;
-  }
-
-  return navigator.vibrate(pattern);
+  return () => {
+    timers.forEach(clearTimeout);
+    navigator.vibrate(0);
+  };
 }
 
 const timestamps = [
@@ -32,6 +33,8 @@ const timestamps = [
   [25.885, 27.840],
   [28.466, 29.745]
 ];
+
+const stopVibration = vibrateTimestamps(timestamps);
 </script>
 </head>
 <body>
