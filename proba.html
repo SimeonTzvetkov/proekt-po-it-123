@@ -30,7 +30,8 @@
   #qr { background:#fff; padding:10px; border-radius:8px; display:inline-block; }
   #qr:empty { display:none; }
   code { word-break:break-all; font-size:.85rem; color:var(--dim); }
-  #count { font-weight:700; font-size:1.4rem; }
+  .n { font-weight:700; font-size:1.4rem; }
+  .row { column-gap:20px; }
   #status { min-height:1.5em; }
   /* phone light */
   video.blackout { filter: brightness(0); }
@@ -152,6 +153,40 @@ function chaosMask(t) {                            // 1 inside a section, linear
   }
   return 0;
 }
+
+/* ---- Slow dark-blue atmosphere (only on some devices) ---- */
+const BLUE_START = 33.60, BLUE_END = 72.30;   // 0:33.60 - 1:12.30
+const BLUE_CHANCE = 0.33;                      // share of devices lit at any given moment (every device takes part, in its own rhythm)
+const BLUE_SWELL = [4.5, 9];                   // seconds a swell lasts
+const BLUE_FADE_IN = 2.5, BLUE_FADE_OUT = 3.0; // seconds; it is fully dark again before the white vibration returns
+const smooth01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+function buildBlue() {                         // a slow, out-of-phase series of dark-blue swells for this device
+  const r = (lo, hi) => lo + Math.random() * (hi - lo);
+  const color = () => hsl(r(206, 232), 0.95, 0.42);   // between deep navy and ocean blue
+  const meanLen = (BLUE_SWELL[0] + BLUE_SWELL[1]) / 2;
+  const meanGap = meanLen * (1 - BLUE_CHANCE) / BLUE_CHANCE;
+  const swell = (t) => ({ t, d: r(BLUE_SWELL[0], BLUE_SWELL[1]), p: r(0.35, 0.7), c1: color(), c2: color() });
+  const ev = [];
+  let t = BLUE_START - Math.random() * (meanLen + meanGap);   // random phase, so devices are out of step
+  while (t < BLUE_END) {
+    const e = swell(t);
+    if (t + e.d > BLUE_START) ev.push(e);
+    t += e.d + meanGap * r(0.4, 1.6);
+  }
+  if (!ev.length) ev.push(swell(r(BLUE_START, BLUE_END - BLUE_SWELL[1])));   // nobody sits it out
+  return ev;
+}
+function blueFrame(ev, t) {                    // -> { b, c } or null
+  if (!ev || t < BLUE_START || t > BLUE_END) return null;
+  const env = smooth01((t - BLUE_START) / BLUE_FADE_IN) * smooth01((BLUE_END - t) / BLUE_FADE_OUT);
+  for (const e of ev) {
+    const a = t - e.t;
+    if (a < 0 || a > e.d) continue;
+    const x = a / e.d, sn = Math.sin(Math.PI * x);
+    return { b: env * e.p * sn * sn, c: e.c1.map((v, i) => Math.round(v + (e.c2[i] - v) * x)) };   // smooth swell, colour drifts
+  }
+  return null;
+}
 const FL_IN = 0.120, FL_PEAK = 0.050, FL_OUT = 0.450;
 const quickFlash = (a) => a < -FL_IN ? 0 : a < 0 ? 1 + a / FL_IN : a < FL_PEAK ? 1 : a < FL_PEAK + FL_OUT ? 1 - (a - FL_PEAK) / FL_OUT : 0;
 const FPS = 24;
@@ -181,7 +216,7 @@ function startCoordinator() {
     <h1>Light show coordinator</h1>
     <p class="sub">Phones join, you pick a track, the track plays here.</p>
     <div class="panel">
-      <div class="row"><span id="count">0</span><span class="dim">phones connected</span></div>
+      <div class="row"><span><span class="n" id="nphones">0</span> <span class="dim">phones</span></span><span><span class="n" id="ncomps">0</span> <span class="dim">computers</span></span><span class="dim">connected</span></div>
       <p id="status" class="dim">Connecting to PeerJS…</p>
       <div id="qr"></div>
       <p><code id="url"></code></p>
@@ -200,6 +235,13 @@ function startCoordinator() {
 
   const audio = $('#audio');
   const conns = new Set();
+  const kinds = new Map();   // connection -> 'phone' | 'computer'
+  const updateCount = () => {
+    let comps = 0;
+    conns.forEach((c) => { if (kinds.get(c) === 'computer') comps++; });
+    $('#nphones').textContent = conns.size - comps;
+    $('#ncomps').textContent = comps;
+  };
   let delay = 0;
   const peer = new Peer(id);
 
@@ -231,14 +273,15 @@ function startCoordinator() {
   peer.on('connection', (c) => {
     c.on('open', () => {
       conns.add(c);
-      $('#count').textContent = conns.size;
+      updateCount();
       c.send(config());
       c.send(state());
     });
     c.on('data', (m) => {
       if (m && m.type === 'ping') c.send({ type: 'pong', t0: m.t0, th: performance.now() });
+      else if (m && m.type === 'hello') { kinds.set(c, m.kind); updateCount(); }
     });
-    const gone = () => { conns.delete(c); $('#count').textContent = conns.size; };
+    const gone = () => { conns.delete(c); kinds.delete(c); updateCount(); };
     c.on('close', gone); c.on('error', gone);
   });
 
@@ -302,8 +345,8 @@ function startPhone(roomId) {
   let T0 = null;                  // host-clock time at which media time was 0
   let fired = new Set();          // cues whose vibration was already triggered
   let testStart = -1e9;
-  let flashOn = [], chaos = [];
-  const rollFlashes = () => { flashOn = FLASH_PEAKS.map(() => Math.random() < FLASH_CHANCE); chaos = buildChaos(); };
+  let flashOn = [], chaos = [], blue = [];
+  const rollFlashes = () => { flashOn = FLASH_PEAKS.map(() => Math.random() < FLASH_CHANCE); chaos = buildChaos(); blue = buildBlue(); };
   rollFlashes();
   let conn = null, wakeLock = null;
   let trim = 0;
@@ -332,7 +375,7 @@ function startPhone(roomId) {
     const retry = (msg, ms) => { status(msg); setTimeout(() => { try { peer.destroy(); } catch (e) {} connect(); }, ms); };
     peer.on('open', () => {
       conn = peer.connect(roomId, { reliable: true });
-      conn.on('open', () => { status('Connected. Tap the button.', true); samples = []; burst(); });
+      conn.on('open', () => { status('Connected. Tap the button.', true); conn.send({ type: 'hello', kind: IS_COMPUTER ? 'computer' : 'phone' }); samples = []; burst(); });
       conn.on('data', onData);
       conn.on('close', () => retry('Disconnected. Retrying…', 1500));
     });
@@ -435,6 +478,8 @@ function startPhone(roomId) {
         const f = e.p * cm * pulseEnv(a);
         if (f > b) { b = f; col = e.c; }
       }
+      const bl = blueFrame(blue, t);
+      if (bl && bl.b > b) { b = bl.b; col = bl.c; }
     }
     const tf = env(performance.now() - testStart);
     if (tf > b) { b = tf; col = [255, 255, 255]; }
