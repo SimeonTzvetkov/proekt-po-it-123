@@ -32,6 +32,7 @@
   code { word-break:break-all; font-size:.85rem; color:var(--dim); }
   .n { font-weight:700; font-size:1.4rem; }
   .row { column-gap:20px; }
+  select, .num { font:inherit; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
   #status { min-height:1.5em; }
   /* phone light */
   video.blackout { filter: brightness(0); }
@@ -200,24 +201,162 @@ const IS_COMPUTER = deviceParam ? deviceParam === 'pc' :
   !(/Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent) ||
     (navigator.userAgentData && navigator.userAgentData.mobile) ||
     (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
+const APP_ID = 'phone-light-show';   // namespace for the serverless libraries; change it if you fork the project
+const TRANSPORTS = {
+  peerjs:  { label: 'PeerJS (recommended)',
+             note: 'Star topology through the free PeerJS cloud broker. The most reliable choice and the one to use for large crowds.' },
+  nostr:   { label: 'Trystero - Nostr', url: 'https://cdn.jsdelivr.net/npm/@trystero-p2p/nostr@0.26.0/+esm',
+             note: 'No broker of your own: peers find each other through public Nostr relays. Phones only connect to the coordinator, never to each other.' },
+  torrent: { label: 'Trystero - BitTorrent', url: 'https://cdn.jsdelivr.net/npm/@trystero-p2p/torrent@0.26.0/+esm',
+             note: 'Same as above, but peers find each other through public BitTorrent trackers. Try it if the Nostr relays are slow.' },
+  p2pjs:   { label: 'p2p.js (experimental)', url: 'https://esm.sh/p2p.js@0.0.2',
+             note: 'Experimental. p2p.js connects every device to every other device, so phones are split into small shards that the coordinator joins all at once. Use about one shard per 8 phones.' }
+};
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
 
 const $ = (s) => document.querySelector(s);
 const app = $('#app');
 const room = new URLSearchParams(location.search).get('room');
+const VIA = TRANSPORTS[new URLSearchParams(location.search).get('via')] ? new URLSearchParams(location.search).get('via') : 'peerjs';
+const SHARDS = Math.max(1, Math.min(32, +new URLSearchParams(location.search).get('sh') || 4));
 room ? startPhone(room) : startCoordinator();
+
+/* ============ TRANSPORTS ============
+   Every transport gives the app the same tiny interface:
+   host:   hostTransport(kind, roomId, shards, {onReady, onError, onConnect(conn)})  -> Promise<{close}>
+           conn = { send(msg), onData, onClose }   (the host sets onData / onClose)
+   client: clientTransport(kind, roomId, shards, {onOpen, onData(msg), onClose(text)}) -> {send(msg), close()}      */
+const decodeMsg = (d) => {
+  if (d && typeof d === 'object' && !(d instanceof ArrayBuffer) && !ArrayBuffer.isView(d)) return d;   // already an object
+  try { return JSON.parse(typeof d === 'string' ? d : new TextDecoder().decode(d)); } catch (e) { return null; }
+};
+
+function hostTransport(kind, roomId, shards, h) {
+  if (kind === 'peerjs') return Promise.resolve(hostPeerJS(roomId, h));
+  if (kind === 'p2pjs') return hostP2PJS(roomId, shards, h);
+  return hostTrystero(kind, roomId, h);
+}
+function clientTransport(kind, roomId, shards, h) {
+  let inner = null, closed = false;
+  (async () => {
+    try {
+      inner = kind === 'peerjs' ? clientPeerJS(roomId, h)
+            : kind === 'p2pjs' ? await clientP2PJS(roomId, shards, h)
+            : await clientTrystero(kind, roomId, h);
+      if (closed) inner.close();
+    } catch (e) { h.onClose('Could not load the connection library.'); }
+  })();
+  return { send: (m) => { if (inner) inner.send(m); }, close: () => { closed = true; if (inner) inner.close(); } };
+}
+
+/* --- PeerJS: coordinator is the hub --- */
+function hostPeerJS(roomId, h) {
+  const peer = new Peer(roomId);
+  peer.on('open', () => h.onReady());
+  peer.on('error', (e) => h.onError('PeerJS error: ' + e.type));
+  peer.on('connection', (c) => {
+    const conn = { send: (m) => { if (c.open) c.send(m); }, onData: null, onClose: null };
+    c.on('open', () => h.onConnect(conn));
+    c.on('data', (m) => conn.onData && conn.onData(m));
+    const gone = () => conn.onClose && conn.onClose();
+    c.on('close', gone); c.on('error', gone);
+  });
+  return { close: () => { try { peer.destroy(); } catch (e) {} } };
+}
+function clientPeerJS(roomId, h) {
+  const peer = new Peer();
+  let c = null;
+  peer.on('open', () => {
+    c = peer.connect(roomId, { reliable: true });
+    c.on('open', () => h.onOpen());
+    c.on('data', (m) => h.onData(m));
+    c.on('close', () => h.onClose('Disconnected. Retrying…'));
+  });
+  peer.on('error', () => h.onClose('Connection problem. Retrying…'));
+  return { send: (m) => { if (c && c.open) c.send(m); }, close: () => { try { peer.destroy(); } catch (e) {} } };
+}
+
+/* --- Trystero (0.26 API: room.makeAction(...) returns {send, onMessage}).
+       Phones join with passive:true, so they only ever connect to the (active) coordinator. --- */
+async function hostTrystero(kind, roomId, h) {
+  const { joinRoom } = await import(TRANSPORTS[kind].url);
+  const room = joinRoom({ appId: APP_ID }, roomId);
+  const act = room.makeAction('ls');
+  const peers = new Map();
+  room.onPeerJoin = (pid) => {
+    if (peers.has(pid)) return;
+    const conn = { send: (m) => { try { Promise.resolve(act.send(m, { target: pid })).catch(() => {}); } catch (e) {} }, onData: null, onClose: null };
+    peers.set(pid, conn); h.onConnect(conn);
+  };
+  room.onPeerLeave = (pid) => { const c = peers.get(pid); peers.delete(pid); if (c && c.onClose) c.onClose(); };
+  act.onMessage = (data, ctx) => { const c = peers.get(ctx.peerId); if (c && c.onData) c.onData(data); };
+  h.onReady();
+  return { close: () => { try { room.leave(); } catch (e) {} } };
+}
+async function clientTrystero(kind, roomId, h) {
+  const { joinRoom } = await import(TRANSPORTS[kind].url);
+  const room = joinRoom({ appId: APP_ID, passive: true }, roomId);
+  const act = room.makeAction('ls');
+  let hostId = null;
+  room.onPeerJoin = (pid) => { if (!hostId) { hostId = pid; h.onOpen(); } };   // the only peer that connects to a passive phone is the coordinator
+  room.onPeerLeave = (pid) => { if (pid === hostId) { hostId = null; h.onClose('Disconnected. Retrying…'); } };
+  act.onMessage = (data, ctx) => { if (ctx.peerId === hostId) h.onData(data); };
+  return { send: (m) => { if (hostId) { try { Promise.resolve(act.send(m, { target: hostId })).catch(() => {}); } catch (e) {} } }, close: () => { try { room.leave(); } catch (e) {} } };
+}
+
+/* --- p2p.js (0.0.2): createPeer({appid}) meshes everybody with the same appid.
+       Phones pick one of N shard ids; the coordinator creates one peer per shard. --- */
+async function hostP2PJS(roomId, shards, h) {
+  const { createPeer } = await import(TRANSPORTS.p2pjs.url);
+  const rooms = [], conns = new Map();
+  for (let k = 0; k < shards; k++) {
+    const p = createPeer({ appid: APP_ID + '-' + roomId + '-' + k });
+    rooms.push(p);
+    p.onPeerConnect((pid) => {
+      const key = k + ':' + pid;
+      if (conns.has(key)) return;
+      const conn = { send: (m) => { try { p.sendPeerData(pid, JSON.stringify(m)); } catch (e) {} }, onData: null, onClose: null };
+      conns.set(key, conn); h.onConnect(conn);
+    });
+    p.onPeerDisconnect((pid) => { const key = k + ':' + pid, c = conns.get(key); conns.delete(key); if (c && c.onClose) c.onClose(); });
+    p.onPeerData((pid, data) => { const c = conns.get(k + ':' + pid), m = decodeMsg(data); if (c && c.onData && m) c.onData(m); });
+  }
+  h.onReady();
+  return { close: () => rooms.forEach((p) => { try { p.destroyPeer(); } catch (e) {} }) };
+}
+async function clientP2PJS(roomId, shards, h) {
+  const { createPeer } = await import(TRANSPORTS.p2pjs.url);
+  const k = Math.floor(Math.random() * shards);
+  const p = createPeer({ appid: APP_ID + '-' + roomId + '-' + k });
+  let hostId = null;
+  // other phones in the shard also connect to us; the coordinator is the peer that sends us a 'config' message
+  p.onPeerData((pid, data) => {
+    const m = decodeMsg(data); if (!m) return;
+    if (!hostId && m.type === 'config') { hostId = pid; h.onOpen(); }
+    if (pid === hostId) h.onData(m);
+  });
+  p.onPeerDisconnect((pid) => { if (pid === hostId) { hostId = null; h.onClose('Disconnected. Retrying…'); } });
+  return { send: (m) => { if (hostId) { try { p.sendPeerData(hostId, JSON.stringify(m)); } catch (e) {} } }, close: () => { try { p.destroyPeer(); } catch (e) {} } };
+}
 
 /* ============ COORDINATOR ============ */
 function startCoordinator() {
-  const id = 'lightshow-' + Math.random().toString(36).slice(2, 7);
-  const joinUrl = location.origin + location.pathname + '?room=' + id;
+  let id = '';
+  let via = 'peerjs', shards = 4;
+  try { const v = localStorage.getItem('via'); if (TRANSPORTS[v]) via = v; shards = +localStorage.getItem('shards') || 4; } catch (e) {}
   app.innerHTML = `
     <h1>Light show coordinator</h1>
     <p class="sub">Phones join, you pick a track, the track plays here.</p>
     <div class="panel">
       <div class="row"><span><span class="n" id="nphones">0</span> <span class="dim">phones</span></span><span><span class="n" id="ncomps">0</span> <span class="dim">computers</span></span><span class="dim">connected</span></div>
-      <p id="status" class="dim">Connecting to PeerJS…</p>
+      <p id="status" class="dim">Connecting…</p>
+      <label for="via">Connection type</label>
+      <div class="row" style="margin:6px 0">
+        <select id="via"></select>
+        <label id="shwrap" class="row" style="display:none;gap:8px">Shards <input class="num" type="number" id="shards" min="1" max="32" style="width:4.5em"></label>
+      </div>
+      <p id="viaNote" class="dim" style="margin:0 0 14px;font-size:.9rem"></p>
       <div id="qr"></div>
       <p><code id="url"></code></p>
     </div>
@@ -231,8 +370,6 @@ function startCoordinator() {
       <div class="row"><input type="range" id="delay" min="-300" max="800" step="10" value="0" style="flex:1"><span id="delayv">0</span></div>
       <div class="row" style="margin-top:12px"><button class="ghost" id="test">Test flash</button><button class="ghost" id="resync">Resync clocks</button></div>
     </div>`;
-  $('#url').textContent = joinUrl;
-
   const audio = $('#audio');
   const conns = new Set();
   const kinds = new Map();   // connection -> 'phone' | 'computer'
@@ -243,15 +380,50 @@ function startCoordinator() {
     $('#ncomps').textContent = comps;
   };
   let delay = 0;
-  const peer = new Peer(id);
 
-  peer.on('open', () => {
-    $('#status').textContent = 'Ready. Scan the code or open the link on each phone.';
-    try { new QRCode($('#qr'), { text: joinUrl, width: 180, height: 180 }); } catch (e) {}
-  });
-  peer.on('error', (e) => { $('#status').textContent = 'PeerJS error: ' + e.type; });
+  /* --- connection type: dropdown, QR code and join link follow it --- */
+  const viaSel = $('#via');
+  Object.entries(TRANSPORTS).forEach(([k, t]) => viaSel.add(new Option(t.label, k)));
+  viaSel.value = via; $('#shards').value = shards;
+  const joinUrl = () => location.origin + location.pathname + '?room=' + id +
+    (via !== 'peerjs' ? '&via=' + via : '') + (via === 'p2pjs' ? '&sh=' + shards : '');
+  const showJoin = () => {
+    $('#url').textContent = joinUrl();
+    $('#qr').innerHTML = '';
+    try { new QRCode($('#qr'), { text: joinUrl(), width: 180, height: 180 }); } catch (e) {}
+    $('#viaNote').textContent = TRANSPORTS[via].note;
+    $('#shwrap').style.display = via === 'p2pjs' ? '' : 'none';
+  };
+  let current = null, token = 0;
+  const attach = (conn) => {
+    conns.add(conn); updateCount();
+    conn.onData = (m) => {
+      if (m && m.type === 'ping') conn.send({ type: 'pong', t0: m.t0, th: performance.now() });
+      else if (m && m.type === 'hello') { kinds.set(conn, m.kind); updateCount(); }
+    };
+    conn.onClose = () => { conns.delete(conn); kinds.delete(conn); updateCount(); };
+    conn.send(config()); conn.send(state());
+  };
+  async function startVia(switched) {
+    const my = ++token;
+    if (current) { try { current.close(); } catch (e) {} current = null; }
+    conns.clear(); kinds.clear(); updateCount();
+    id = 'lightshow-' + Math.random().toString(36).slice(2, 7);   // a fresh room for every (re)start, so old phones can't linger in it
+    showJoin();
+    $('#status').textContent = 'Connecting via ' + TRANSPORTS[via].label + '…';
+    try {
+      const t = await hostTransport(via, id, shards, {
+        onReady: () => { if (my === token) $('#status').textContent = (switched ? 'Switched to ' + TRANSPORTS[via].label + '. Phones must rejoin with the new QR code or link.' : 'Ready. Scan the code or open the link on each phone.'); },
+        onError: (msg) => { if (my === token) $('#status').textContent = msg; },
+        onConnect: (conn) => { if (my === token) attach(conn); }
+      });
+      if (my !== token) t.close(); else current = t;
+    } catch (e) {
+      if (my === token) $('#status').textContent = 'Could not start ' + TRANSPORTS[via].label + ': ' + (e && e.message || e);
+    }
+  }
 
-  const send = (msg) => conns.forEach((c) => c.open && c.send(msg));
+  const send = (msg) => conns.forEach((c) => c.send(msg));
   const rawT0 = () => performance.now() - audio.currentTime * 1000 / audio.playbackRate;
   // currentTime is only refreshed in chunks, so a stale read makes T0 too late, never too early.
   // Record an estimate only when currentTime actually changed and use the minimum of the recent ones.
@@ -269,21 +441,6 @@ function startCoordinator() {
   const T0 = () => est.length >= 5 ? Math.min(...est) : rawT0();
   const state = () => ({ type: 'state', playing: !audio.paused && !audio.ended, T0: T0() });
   const config = () => ({ type: 'config', timestamps: TIMESTAMPS, flash: FLASH_MS, fade: FADE_MS, delay, flashes: FLASH_PEAKS });
-
-  peer.on('connection', (c) => {
-    c.on('open', () => {
-      conns.add(c);
-      updateCount();
-      c.send(config());
-      c.send(state());
-    });
-    c.on('data', (m) => {
-      if (m && m.type === 'ping') c.send({ type: 'pong', t0: m.t0, th: performance.now() });
-      else if (m && m.type === 'hello') { kinds.set(c, m.kind); updateCount(); }
-    });
-    const gone = () => { conns.delete(c); kinds.delete(c); updateCount(); };
-    c.on('close', gone); c.on('error', gone);
-  });
 
   $('#file').addEventListener('change', (e) => {
     const f = e.target.files[0];
@@ -303,6 +460,18 @@ function startCoordinator() {
   $('#fs').addEventListener('click', () => (audio.requestFullscreen || audio.webkitRequestFullscreen).call(audio));
   $('#test').addEventListener('click', () => send({ type: 'test' }));
   $('#resync').addEventListener('click', () => send({ type: 'resync' }));
+
+  viaSel.addEventListener('change', () => {
+    via = viaSel.value;
+    try { localStorage.setItem('via', via); } catch (e) {}
+    startVia(true);
+  });
+  $('#shards').addEventListener('change', () => {
+    shards = Math.max(1, Math.min(32, +$('#shards').value || 4)); $('#shards').value = shards;
+    try { localStorage.setItem('shards', shards); } catch (e) {}
+    if (via === 'p2pjs') startVia(true);
+  });
+  startVia(false);
 }
 
 /* ============ PHONE ============ */
@@ -348,7 +517,7 @@ function startPhone(roomId) {
   let flashOn = [], chaos = [], blue = [];
   const rollFlashes = () => { flashOn = FLASH_PEAKS.map(() => Math.random() < FLASH_CHANCE); chaos = buildChaos(); blue = buildBlue(); };
   rollFlashes();
-  let conn = null, wakeLock = null;
+  let link = null, ready = false, gen = 0, retryTimer = null, wakeLock = null;
   let trim = 0;
   try { trim = +localStorage.getItem('trim') || 0; $('#trim').value = trim; } catch (e) {}
   $('#trim').addEventListener('input', (e) => {
@@ -366,20 +535,29 @@ function startPhone(roomId) {
     $('#sync').textContent = 'link ' + Math.round(best[0].rtt) + ' ms, ' + samples.length + ' samples';
   }
   const synced = () => samples.length >= 5;
-  function ping() { if (conn && conn.open && !document.hidden) conn.send({ type: 'ping', t0: performance.now() }); }
+  function ping() { if (link && ready && !document.hidden) link.send({ type: 'ping', t0: performance.now() }); }
   function burst(n = 20, spread = 400) { for (let i = 0; i < n; i++) setTimeout(ping, Math.random() * spread + i * 70); }
   setInterval(ping, 2500 + Math.random() * 1000);
 
   function connect() {
-    const peer = new Peer();
-    const retry = (msg, ms) => { status(msg); setTimeout(() => { try { peer.destroy(); } catch (e) {} connect(); }, ms); };
-    peer.on('open', () => {
-      conn = peer.connect(roomId, { reliable: true });
-      conn.on('open', () => { status('Connected. Tap the button.', true); conn.send({ type: 'hello', kind: IS_COMPUTER ? 'computer' : 'phone' }); samples = []; burst(); });
-      conn.on('data', onData);
-      conn.on('close', () => retry('Disconnected. Retrying…', 1500));
+    if (link) { try { link.close(); } catch (e) {} }
+    ready = false;
+    const my = ++gen;                       // ignore late events of an old connection
+    status('Connecting…');
+    link = clientTransport(VIA, roomId, SHARDS, {
+      onOpen: () => {
+        if (my !== gen) return;
+        ready = true; status('Connected. Tap the button.', true);
+        link.send({ type: 'hello', kind: IS_COMPUTER ? 'computer' : 'phone' });
+        samples = []; burst();
+      },
+      onData: (m) => { if (my === gen && m) onData(m); },
+      onClose: (msg) => {
+        if (my !== gen || retryTimer) return;
+        ready = false; status(msg || 'Disconnected. Retrying…');
+        retryTimer = setTimeout(() => { retryTimer = null; connect(); }, 2000);
+      }
     });
-    peer.on('error', () => retry('Connection problem. Retrying…', 2000));
   }
 
   function onData(m) {
