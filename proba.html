@@ -202,6 +202,8 @@ const IS_COMPUTER = deviceParam ? deviceParam === 'pc' :
     (navigator.userAgentData && navigator.userAgentData.mobile) ||
     (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
 const APP_ID = 'phone-light-show';   // namespace for the serverless libraries; change it if you fork the project
+// Achex Cloud (https://achex.ca/develop): a free WebSocket relay. The legacy ws://achex.ca:4010 server cannot be used from an https page.
+const ACHEX = { url: 'wss://cloud.achex.ca', instance: '', password: 'lightshow' };   // instance: optional, becomes wss://cloud.achex.ca/<instance>
 const TRANSPORTS = {
   peerjs:  { label: 'PeerJS (recommended)',
              note: 'Star topology through the free PeerJS cloud broker. The most reliable choice and the one to use for large crowds.' },
@@ -209,6 +211,8 @@ const TRANSPORTS = {
              note: 'No broker of your own: peers find each other through public Nostr relays. Phones only connect to the coordinator, never to each other.' },
   torrent: { label: 'Trystero - BitTorrent', url: 'https://cdn.jsdelivr.net/npm/@trystero-p2p/torrent@0.26.0/+esm',
              note: 'Same as above, but peers find each other through public BitTorrent trackers. Try it if the Nostr relays are slow.' },
+  achex:   { label: 'Achex (WebSocket relay)',
+             note: 'Everything goes through the free Achex Cloud relay over a normal secure WebSocket, so it also works on networks that block WebRTC. Messages pass through their server.' },
   p2pjs:   { label: 'p2p.js (experimental)', url: 'https://esm.sh/p2p.js@0.0.2',
              note: 'Experimental. p2p.js connects every device to every other device, so phones are split into small shards that the coordinator joins all at once. Use about one shard per 8 phones.' }
 };
@@ -234,6 +238,7 @@ const decodeMsg = (d) => {
 
 function hostTransport(kind, roomId, shards, h) {
   if (kind === 'peerjs') return Promise.resolve(hostPeerJS(roomId, h));
+  if (kind === 'achex') return Promise.resolve(hostAchex(roomId, h));
   if (kind === 'p2pjs') return hostP2PJS(roomId, shards, h);
   return hostTrystero(kind, roomId, h);
 }
@@ -242,6 +247,7 @@ function clientTransport(kind, roomId, shards, h) {
   (async () => {
     try {
       inner = kind === 'peerjs' ? clientPeerJS(roomId, h)
+            : kind === 'achex' ? clientAchex(roomId, h)
             : kind === 'p2pjs' ? await clientP2PJS(roomId, shards, h)
             : await clientTrystero(kind, roomId, h);
       if (closed) inner.close();
@@ -275,6 +281,72 @@ function clientPeerJS(roomId, h) {
   });
   peer.on('error', () => h.onClose('Connection problem. Retrying…'));
   return { send: (m) => { if (c && c.open) c.send(m); }, close: () => { try { peer.destroy(); } catch (e) {} } };
+}
+
+/* --- Achex Cloud: a plain WebSocket relay. Protocol (from achex.ca's own jquery.achex.js):
+       send {"auth":name,"passwd":pw}, wait for {"auth":"OK","SID":n}; then {"toS":sid,...} reaches one session.
+       Every received message carries "FROM" and "sID". Our payload travels as a JSON string in the field "ls". --- */
+const achexUrl = () => ACHEX.url + (ACHEX.instance ? '/' + ACHEX.instance : '');
+const achexAuthOk = (r) => r && r.auth !== undefined && String(r.auth).toLowerCase() === 'ok';
+function hostAchex(roomId, h) {
+  const me = 'lsh-' + roomId, conns = new Map();   // session id -> conn
+  let ws = null, closed = false, ready = false, timer = null;
+  const raw = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+  const open = () => {
+    ws = new WebSocket(achexUrl());
+    ws.onopen = () => raw({ auth: me, passwd: ACHEX.password });
+    ws.onmessage = (e) => {
+      let r; try { r = JSON.parse(e.data); } catch (x) { return; }
+      if (!ready) {
+        if (achexAuthOk(r)) { ready = true; h.onReady(); }
+        else if (r && r.auth !== undefined) h.onError('Achex refused the login (' + r.auth + '). If you need an instance, set ACHEX.instance in the file.');
+        return;
+      }
+      if (!r || r.ls === undefined || r.sID === undefined) return;
+      let m; try { m = JSON.parse(r.ls); } catch (x) { return; }
+      let c = conns.get(r.sID);
+      if (!c) {
+        c = { seen: 0, onData: null, onClose: null, send: (p) => raw({ toS: r.sID, ls: JSON.stringify(p) }) };
+        conns.set(r.sID, c); h.onConnect(c);
+      }
+      c.seen = Date.now();
+      if (c.onData) c.onData(m);
+    };
+    ws.onclose = () => { ready = false; if (!closed) setTimeout(open, 2000); };
+    ws.onerror = () => {};
+  };
+  open();
+  // the relay does not tell us when a phone disappears, so a phone that stops pinging for 12 s counts as gone
+  timer = setInterval(() => conns.forEach((c, k) => { if (Date.now() - c.seen > 12000) { conns.delete(k); if (c.onClose) c.onClose(); } }), 3000);
+  return { close: () => { closed = true; clearInterval(timer); try { ws.close(); } catch (e) {} } };
+}
+function clientAchex(roomId, h) {
+  const host = 'lsh-' + roomId, me = 'lsp-' + Math.random().toString(36).slice(2, 10);
+  let ws = null, closed = false, ready = false, hostSid = null, lastHost = 0, joinTimer = null, watchdog = null;
+  const raw = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+  const fail = (msg) => { if (closed) return; closed = true; clearInterval(joinTimer); clearInterval(watchdog); try { ws.close(); } catch (e) {} h.onClose(msg); };
+  ws = new WebSocket(achexUrl());
+  ws.onopen = () => raw({ auth: me, passwd: ACHEX.password });
+  ws.onmessage = (e) => {
+    let r; try { r = JSON.parse(e.data); } catch (x) { return; }
+    if (!ready) {
+      if (achexAuthOk(r)) {
+        ready = true;
+        const knock = () => raw({ to: host, ls: JSON.stringify({ type: 'join' }) });   // the coordinator answers its first contact with config + state
+        knock(); joinTimer = setInterval(() => { if (hostSid === null) knock(); }, 1000);
+        watchdog = setInterval(() => { if (hostSid !== null && Date.now() - lastHost > 12000) fail('Coordinator stopped answering. Retrying…'); }, 3000);
+      } else if (r && r.auth !== undefined) fail('Achex refused the login. Retrying…');
+      return;
+    }
+    if (!r || r.ls === undefined || r.sID === undefined || String(r.FROM).indexOf(host) !== 0) return;
+    let m; try { m = JSON.parse(r.ls); } catch (x) { return; }
+    lastHost = Date.now();
+    if (hostSid === null) { hostSid = r.sID; clearInterval(joinTimer); h.onOpen(); }
+    h.onData(m);
+  };
+  ws.onclose = () => fail('Disconnected. Retrying…');
+  ws.onerror = () => {};
+  return { send: (m) => { if (hostSid !== null) raw({ toS: hostSid, ls: JSON.stringify(m) }); }, close: () => { closed = true; clearInterval(joinTimer); clearInterval(watchdog); try { ws.close(); } catch (e) {} } };
 }
 
 /* --- Trystero (0.26 API: room.makeAction(...) returns {send, onMessage}).
