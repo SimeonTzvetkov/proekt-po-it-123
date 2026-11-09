@@ -201,20 +201,18 @@ const IS_COMPUTER = deviceParam ? deviceParam === 'pc' :
   !(/Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent) ||
     (navigator.userAgentData && navigator.userAgentData.mobile) ||
     (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)));
-const APP_ID = 'phone-light-show';   // namespace for the serverless libraries; change it if you fork the project
 // Achex Cloud (https://achex.ca/develop): a free WebSocket relay. The legacy ws://achex.ca:4010 server cannot be used from an https page.
 const ACHEX = { url: 'wss://cloud.achex.ca', instance: '', password: 'lightshow' };   // instance: optional, becomes wss://cloud.achex.ca/<instance>
+const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };            // add a TURN server here if some phones cannot connect
 const TRANSPORTS = {
-  peerjs:  { label: 'PeerJS (recommended)',
-             note: 'Star topology through the free PeerJS cloud broker. The most reliable choice and the one to use for large crowds.' },
-  nostr:   { label: 'Trystero - Nostr', url: 'https://cdn.jsdelivr.net/npm/@trystero-p2p/nostr@0.26.0/+esm',
-             note: 'No broker of your own: peers find each other through public Nostr relays. Phones only connect to the coordinator, never to each other.' },
-  torrent: { label: 'Trystero - BitTorrent', url: 'https://cdn.jsdelivr.net/npm/@trystero-p2p/torrent@0.26.0/+esm',
-             note: 'Same as above, but peers find each other through public BitTorrent trackers. Try it if the Nostr relays are slow.' },
-  achex:   { label: 'Achex (WebSocket relay)',
-             note: 'Everything goes through the free Achex Cloud relay over a normal secure WebSocket, so it also works on networks that block WebRTC. Messages pass through their server.' },
-  p2pjs:   { label: 'p2p.js (experimental)', url: 'https://esm.sh/p2p.js@0.0.2',
-             note: 'Experimental. p2p.js connects every device to every other device, so phones are split into small shards that the coordinator joins all at once. Use about one shard per 8 phones.' }
+  peerjs:   { label: 'PeerJS (recommended)', qr: true,
+              note: 'Star topology through the free PeerJS cloud broker. The most reliable choice and the one to use for large crowds.' },
+  achexrtc: { label: 'Achex handshake, then WebRTC', qr: true,
+              note: 'Achex only introduces the phone and the coordinator. Once the WebRTC channel is open the phone drops its WebSocket and everything runs peer to peer.' },
+  achex:    { label: 'Achex relay (WebSocket)', qr: true,
+              note: 'Everything goes through the free Achex Cloud relay over a normal secure WebSocket, so it also works on networks that block WebRTC. Messages pass through their server.' },
+  manual:   { label: 'WebRTC, manual link exchange', manual: true,
+              note: 'No server at all. Create a link for each phone and send it over any chat app. The phone sends a reply link back, and you open it on this computer.' }
 };
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
@@ -223,37 +221,40 @@ const $ = (s) => document.querySelector(s);
 const app = $('#app');
 const room = new URLSearchParams(location.search).get('room');
 const VIA = TRANSPORTS[new URLSearchParams(location.search).get('via')] ? new URLSearchParams(location.search).get('via') : 'peerjs';
-const SHARDS = Math.max(1, Math.min(32, +new URLSearchParams(location.search).get('sh') || 4));
-room ? startPhone(room) : startCoordinator();
+if (/[#&]a=/.test(location.hash)) startAnswerReceiver();      // someone opened a phone's reply link
+else room ? startPhone(room) : startCoordinator();
+
+function startAnswerReceiver() {
+  const m = location.hash.match(/a=([a-z0-9]{4})\.([A-Za-z0-9_-]+)/);
+  let ok = false;
+  if (m) { try { localStorage.setItem('lsa:' + m[1], m[1] + '.' + m[2]); ok = true; } catch (e) {} }   // the coordinator window listens for this
+  app.innerHTML = ok
+    ? '<h1>Reply received</h1><p class="sub">You can close this window now. The coordinator window finishes connecting the phone by itself.</p><p class="dim">Nothing happening? Open this link in the same browser as the coordinator, or paste it into the “reply link” box there.</p>'
+    : '<h1>Could not read this link</h1><p class="sub">Paste the whole link into the “reply link” box on the coordinator instead.</p>';
+}
 
 /* ============ TRANSPORTS ============
    Every transport gives the app the same tiny interface:
-   host:   hostTransport(kind, roomId, shards, {onReady, onError, onConnect(conn)})  -> Promise<{close}>
+   host:   hostTransport(kind, roomId, {onReady, onError, onConnect(conn), onLink?, onLinkState?}) -> Promise<{close, ...}>
            conn = { send(msg), onData, onClose }   (the host sets onData / onClose)
-   client: clientTransport(kind, roomId, shards, {onOpen, onData(msg), onClose(text)}) -> {send(msg), close()}      */
-const decodeMsg = (d) => {
-  if (d && typeof d === 'object' && !(d instanceof ArrayBuffer) && !ArrayBuffer.isView(d)) return d;   // already an object
-  try { return JSON.parse(typeof d === 'string' ? d : new TextDecoder().decode(d)); } catch (e) { return null; }
-};
-
-function hostTransport(kind, roomId, shards, h) {
+   client: clientTransport(kind, roomId, {onOpen, onData(msg), onClose(text, fatal), onAnswer?}) -> {send(msg), close()}      */
+function hostTransport(kind, roomId, h) {
   if (kind === 'peerjs') return Promise.resolve(hostPeerJS(roomId, h));
   if (kind === 'achex') return Promise.resolve(hostAchex(roomId, h));
-  if (kind === 'p2pjs') return hostP2PJS(roomId, shards, h);
-  return hostTrystero(kind, roomId, h);
+  if (kind === 'achexrtc') return Promise.resolve(hostAchexRTC(roomId, h));
+  if (kind === 'manual') return Promise.resolve(hostManual(roomId, h));
+  return Promise.reject(new Error('Unknown connection type'));
 }
-function clientTransport(kind, roomId, shards, h) {
-  let inner = null, closed = false;
-  (async () => {
-    try {
-      inner = kind === 'peerjs' ? clientPeerJS(roomId, h)
-            : kind === 'achex' ? clientAchex(roomId, h)
-            : kind === 'p2pjs' ? await clientP2PJS(roomId, shards, h)
-            : await clientTrystero(kind, roomId, h);
-      if (closed) inner.close();
-    } catch (e) { h.onClose('Could not load the connection library.'); }
-  })();
-  return { send: (m) => { if (inner) inner.send(m); }, close: () => { closed = true; if (inner) inner.close(); } };
+function clientTransport(kind, roomId, h) {
+  try {
+    if (kind === 'achex') return clientAchex(roomId, h);
+    if (kind === 'achexrtc') return clientAchexRTC(roomId, h);
+    if (kind === 'manual') return clientManual(roomId, h);
+    return clientPeerJS(roomId, h);
+  } catch (e) {
+    setTimeout(() => h.onClose('Connection failed: ' + (e && e.message || e)), 0);
+    return { send() {}, close() {} };
+  }
 }
 
 /* --- PeerJS: coordinator is the hub --- */
@@ -349,74 +350,193 @@ function clientAchex(roomId, h) {
   return { send: (m) => { if (hostSid !== null) raw({ toS: hostSid, ls: JSON.stringify(m) }); }, close: () => { closed = true; clearInterval(joinTimer); clearInterval(watchdog); try { ws.close(); } catch (e) {} } };
 }
 
-/* --- Trystero (0.26 API: room.makeAction(...) returns {send, onMessage}).
-       Phones join with passive:true, so they only ever connect to the (active) coordinator. --- */
-async function hostTrystero(kind, roomId, h) {
-  const { joinRoom } = await import(TRANSPORTS[kind].url);
-  const room = joinRoom({ appId: APP_ID }, roomId);
-  const act = room.makeAction('ls');
-  const peers = new Map();
-  room.onPeerJoin = (pid) => {
-    if (peers.has(pid)) return;
-    const conn = { send: (m) => { try { Promise.resolve(act.send(m, { target: pid })).catch(() => {}); } catch (e) {} }, onData: null, onClose: null };
-    peers.set(pid, conn); h.onConnect(conn);
-  };
-  room.onPeerLeave = (pid) => { const c = peers.get(pid); peers.delete(pid); if (c && c.onClose) c.onClose(); };
-  act.onMessage = (data, ctx) => { const c = peers.get(ctx.peerId); if (c && c.onData) c.onData(data); };
-  h.onReady();
-  return { close: () => { try { room.leave(); } catch (e) {} } };
+
+/* --- WebRTC helpers shared by "Achex handshake" and "manual link exchange" --- */
+const b64u = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+function packSdp(sdp) {            // keep only what a data-channel connection needs: ICE login, DTLS fingerprint, UDP candidates
+  const g = (re) => { const m = sdp.match(re); return m ? m[1].trim() : ''; };
+  const fp = g(/a=fingerprint:sha-256 ([0-9A-Fa-f:]+)/);
+  const cands = [...sdp.matchAll(/a=candidate:(\S+ \d+ udp \d+ \S+ \d+ typ \w+(?: raddr \S+ rport \d+)?)/gi)].map((m) => m[1]).slice(0, 5);
+  const data = [g(/a=ice-ufrag:(\S+)/), g(/a=ice-pwd:(\S+)/), b64u(Uint8Array.from(fp.split(':').map((x) => parseInt(x, 16)))), g(/a=setup:(\w+)/), cands];
+  return b64u(new TextEncoder().encode(JSON.stringify(data)));
 }
-async function clientTrystero(kind, roomId, h) {
-  const { joinRoom } = await import(TRANSPORTS[kind].url);
-  const room = joinRoom({ appId: APP_ID, passive: true }, roomId);
-  const act = room.makeAction('ls');
-  let hostId = null;
-  room.onPeerJoin = (pid) => { if (!hostId) { hostId = pid; h.onOpen(); } };   // the only peer that connects to a passive phone is the coordinator
-  room.onPeerLeave = (pid) => { if (pid === hostId) { hostId = null; h.onClose('Disconnected. Retrying…'); } };
-  act.onMessage = (data, ctx) => { if (ctx.peerId === hostId) h.onData(data); };
-  return { send: (m) => { if (hostId) { try { Promise.resolve(act.send(m, { target: hostId })).catch(() => {}); } catch (e) {} } }, close: () => { try { room.leave(); } catch (e) {} } };
+function unpackSdp(code, setup) {  // ...and rebuild a complete session description from it
+  const [u, p, f, st, cands] = JSON.parse(new TextDecoder().decode(unb64u(code)));
+  const fp = [...unb64u(f)].map((x) => x.toString(16).padStart(2, '0').toUpperCase()).join(':');
+  return ['v=0', 'o=- 1 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE 0', 'a=msid-semantic: WMS',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0',
+    'a=ice-ufrag:' + u, 'a=ice-pwd:' + p, 'a=ice-options:trickle', 'a=fingerprint:sha-256 ' + fp, 'a=setup:' + (setup || st),
+    'a=mid:0', 'a=sctp-port:5000', 'a=max-message-size:262144',
+    ...cands.map((c) => 'a=candidate:' + c + ' generation 0'), 'a=end-of-candidates'].join('\r\n') + '\r\n';
+}
+const waitIce = (pc, ms = 2500) => new Promise((res) => {      // no trickle ICE: wait until all candidates are in the description
+  const t0 = Date.now(), iv = setInterval(() => { if (pc.iceGatheringState === 'complete' || Date.now() - t0 > ms) { clearInterval(iv); res(); } }, 80);
+});
+function wireHostChannel(pc, dc, h, onState) {                  // data channel -> conn object for the app
+  const conn = { send: (m) => { if (dc.readyState === 'open') dc.send(JSON.stringify(m)); }, onData: null, onClose: null };
+  const gone = () => { const f = conn.onClose; conn.onClose = null; if (f) f(); };
+  let up = false; const early = [];                              // a phone's first messages can beat our own 'open' event
+  dc.onopen = () => { up = true; onState && onState('connected'); h.onConnect(conn); early.splice(0).forEach((m) => conn.onData && conn.onData(m)); };
+  dc.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } if (!up) early.push(m); else if (conn.onData) conn.onData(m); };
+  dc.onclose = gone;
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') { onState && onState('failed'); gone(); }
+  };
 }
 
-/* --- p2p.js (0.0.2): createPeer({appid}) meshes everybody with the same appid.
-       Phones pick one of N shard ids; the coordinator creates one peer per shard. --- */
-async function hostP2PJS(roomId, shards, h) {
-  const { createPeer } = await import(TRANSPORTS.p2pjs.url);
-  const rooms = [], conns = new Map();
-  for (let k = 0; k < shards; k++) {
-    const p = createPeer({ appid: APP_ID + '-' + roomId + '-' + k });
-    rooms.push(p);
-    p.onPeerConnect((pid) => {
-      const key = k + ':' + pid;
-      if (conns.has(key)) return;
-      const conn = { send: (m) => { try { p.sendPeerData(pid, JSON.stringify(m)); } catch (e) {} }, onData: null, onClose: null };
-      conns.set(key, conn); h.onConnect(conn);
-    });
-    p.onPeerDisconnect((pid) => { const key = k + ':' + pid, c = conns.get(key); conns.delete(key); if (c && c.onClose) c.onClose(); });
-    p.onPeerData((pid, data) => { const c = conns.get(k + ':' + pid), m = decodeMsg(data); if (c && c.onData && m) c.onData(m); });
+/* --- Achex handshake -> WebRTC: Achex only carries the offer/answer. Once the data channel is open the phone closes its
+       WebSocket and everything else runs over WebRTC (the coordinator keeps its socket open so late phones can still join). --- */
+function hostAchexRTC(roomId, h) {
+  const me = 'lsh-' + roomId, peers = new Map();                 // phone session id -> { pc, t, done }
+  let ws = null, closed = false, ready = false;
+  const raw = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+  async function offerTo(sid) {
+    const old = peers.get(sid);
+    if (old && !old.done && Date.now() - old.t < 20000) return;  // a handshake with this phone is already running
+    if (old) { try { old.pc.close(); } catch (e) {} }
+    const pc = new RTCPeerConnection(RTC_CFG), dc = pc.createDataChannel('ls'), p = { pc, t: Date.now(), done: false };
+    peers.set(sid, p);
+    wireHostChannel(pc, dc, { onConnect: (c) => { p.done = true; h.onConnect(c); } });
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc);
+    if (closed || peers.get(sid) !== p) return;
+    raw({ toS: sid, ls: JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp }) });
   }
-  h.onReady();
-  return { close: () => rooms.forEach((p) => { try { p.destroyPeer(); } catch (e) {} }) };
+  const open = () => {
+    ws = new WebSocket(achexUrl());
+    ws.onopen = () => raw({ auth: me, passwd: ACHEX.password });
+    ws.onmessage = (e) => {
+      let r; try { r = JSON.parse(e.data); } catch (x) { return; }
+      if (!ready) {
+        if (achexAuthOk(r)) { ready = true; h.onReady(); }
+        else if (r && r.auth !== undefined) h.onError('Achex refused the login (' + r.auth + '). If you need an instance, set ACHEX.instance in the file.');
+        return;
+      }
+      if (!r || r.ls === undefined || r.sID === undefined) return;
+      let m; try { m = JSON.parse(r.ls); } catch (x) { return; }
+      if (m.type === 'join') offerTo(r.sID).catch((err) => h.onError('WebRTC error: ' + (err && err.message || err)));
+      else if (m.type === 'answer') { const p = peers.get(r.sID); if (p) p.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }).catch(() => {}); }
+    };
+    ws.onclose = () => { ready = false; if (!closed) setTimeout(open, 2000); };
+    ws.onerror = () => {};
+  };
+  open();
+  return { close: () => { closed = true; try { ws.close(); } catch (e) {} peers.forEach((p) => { try { p.pc.close(); } catch (e) {} }); } };
 }
-async function clientP2PJS(roomId, shards, h) {
-  const { createPeer } = await import(TRANSPORTS.p2pjs.url);
-  const k = Math.floor(Math.random() * shards);
-  const p = createPeer({ appid: APP_ID + '-' + roomId + '-' + k });
-  let hostId = null;
-  // other phones in the shard also connect to us; the coordinator is the peer that sends us a 'config' message
-  p.onPeerData((pid, data) => {
-    const m = decodeMsg(data); if (!m) return;
-    if (!hostId && m.type === 'config') { hostId = pid; h.onOpen(); }
-    if (pid === hostId) h.onData(m);
-  });
-  p.onPeerDisconnect((pid) => { if (pid === hostId) { hostId = null; h.onClose('Disconnected. Retrying…'); } });
-  return { send: (m) => { if (hostId) { try { p.sendPeerData(hostId, JSON.stringify(m)); } catch (e) {} } }, close: () => { try { p.destroyPeer(); } catch (e) {} } };
+function clientAchexRTC(roomId, h) {
+  const host = 'lsh-' + roomId, me = 'lsp-' + Math.random().toString(36).slice(2, 10);
+  let ws = null, pc = null, dc = null, closed = false, ready = false, started = false, wsDone = false, knock = null;
+  const raw = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+  const stopWs = () => { wsDone = true; clearInterval(knock); try { ws.close(); } catch (e) {} };   // the WebSocket is only needed for the handshake
+  const fail = (msg) => { if (closed) return; closed = true; stopWs(); try { pc && pc.close(); } catch (e) {} h.onClose(msg); };
+  async function answer(hostSid, sdp) {
+    pc = new RTCPeerConnection(RTC_CFG);
+    pc.ondatachannel = (e) => {
+      dc = e.channel;
+      dc.onopen = () => { stopWs(); h.onOpen(); };
+      dc.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (x) { return; } h.onData(m); };
+      dc.onclose = () => fail('Disconnected. Retrying…');
+    };
+    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') fail('Could not connect. Retrying…'); };
+    await pc.setRemoteDescription({ type: 'offer', sdp });
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitIce(pc);
+    raw({ toS: hostSid, ls: JSON.stringify({ type: 'answer', sdp: pc.localDescription.sdp }) });
+  }
+  ws = new WebSocket(achexUrl());
+  ws.onopen = () => raw({ auth: me, passwd: ACHEX.password });
+  ws.onmessage = (e) => {
+    let r; try { r = JSON.parse(e.data); } catch (x) { return; }
+    if (!ready) {
+      if (achexAuthOk(r)) {
+        ready = true;
+        const ask = () => raw({ to: host, ls: JSON.stringify({ type: 'join' }) });   // "I am here": the coordinator replies with an offer
+        ask(); knock = setInterval(() => { if (!started) ask(); }, 1500);
+      } else if (r && r.auth !== undefined) fail('Achex refused the login. Retrying…');
+      return;
+    }
+    if (!r || r.ls === undefined || r.sID === undefined || String(r.FROM).indexOf(host) !== 0) return;
+    let m; try { m = JSON.parse(r.ls); } catch (x) { return; }
+    if (m.type === 'offer' && !started) { started = true; clearInterval(knock); answer(r.sID, m.sdp).catch((err) => fail('WebRTC error: ' + (err && err.message || err))); }
+  };
+  ws.onclose = () => { if (!wsDone) fail('Disconnected. Retrying…'); };
+  ws.onerror = () => {};
+  setTimeout(() => { if (!closed && !(dc && dc.readyState === 'open')) fail('Connection timed out. Retrying…'); }, 25000);
+  return { send: (m) => { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(m)); }, close: () => { closed = true; stopWs(); try { pc && pc.close(); } catch (e) {} } };
+}
+
+/* --- Manual link exchange: no server at all. The coordinator makes a link (the WebRTC offer sits in the #hash), you send it
+       to a phone, the phone shows a reply link (the answer in its #hash), you open that link on the coordinator's computer.
+       The page that opens it stores the answer in localStorage and says it can be closed; the coordinator window sees
+       the 'storage' event and finishes the handshake. Each phone needs its own link. --- */
+function hostManual(roomId, h) {
+  let closed = false;
+  const offers = new Map();                                      // link id -> { pc, used }
+  const onStorage = (e) => {
+    if (!e.key || e.key.indexOf('lsa:') !== 0 || !e.newValue) return;
+    try { localStorage.removeItem(e.key); } catch (x) {}
+    accept(e.newValue).catch((err) => h.onError(err && err.message || String(err)));
+  };
+  window.addEventListener('storage', onStorage);
+  async function newLink() {
+    const id = Math.random().toString(36).slice(2, 6).padEnd(4, 'x');
+    const pc = new RTCPeerConnection(RTC_CFG), dc = pc.createDataChannel('ls');
+    offers.set(id, { pc, used: false });
+    h.onLinkState(id, 'preparing');
+    wireHostChannel(pc, dc, h, (s) => h.onLinkState(id, s));
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc);
+    if (closed) return id;
+    h.onLink(id, id + '.' + packSdp(pc.localDescription.sdp));
+    h.onLinkState(id, 'waiting');
+    return id;
+  }
+  async function accept(text) {                                  // a reply link, or just the part after #a=
+    const s = String(text);
+    const m = s.match(/a=([a-z0-9]{4})\.([A-Za-z0-9_-]+)/) || s.match(/^\s*([a-z0-9]{4})\.([A-Za-z0-9_-]+)\s*$/);
+    if (!m) throw new Error('That is not a reply link from a phone.');
+    const o = offers.get(m[1]);
+    if (!o) throw new Error('That reply belongs to a phone link that is no longer active.');
+    if (o.used) throw new Error('That reply was already used.');
+    o.used = true;
+    h.onLinkState(m[1], 'connecting');
+    await o.pc.setRemoteDescription({ type: 'answer', sdp: unpackSdp(m[2]) });
+    newLink().catch(() => {});                                   // keep a fresh link ready for the next phone
+  }
+  newLink().then(() => h.onReady()).catch((e) => h.onError('WebRTC error: ' + (e && e.message || e)));
+  return {
+    newLink, accept,
+    close: () => { closed = true; window.removeEventListener('storage', onStorage); offers.forEach((o) => { try { o.pc.close(); } catch (e) {} }); }
+  };
+}
+function clientManual(roomId, h) {
+  const m = location.hash.match(/o=([a-z0-9]{4})\.([A-Za-z0-9_-]+)/);
+  if (!m) { setTimeout(() => h.onClose('This link has no connection data. Ask the coordinator for a new phone link.', true), 0); return { send() {}, close() {} }; }
+  const pc = new RTCPeerConnection(RTC_CFG);
+  let dc = null, done = false;
+  const end = (msg) => { if (!done) { done = true; h.onClose(msg, true); } };   // a link works only once, so there is nothing to retry
+  pc.ondatachannel = (e) => {
+    dc = e.channel;
+    dc.onopen = () => h.onOpen();
+    dc.onmessage = (ev) => { let x; try { x = JSON.parse(ev.data); } catch (err) { return; } h.onData(x); };
+    dc.onclose = () => end('Disconnected. Ask the coordinator for a new phone link.');
+  };
+  pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') end('Could not connect. Ask the coordinator for a new phone link.'); };
+  (async () => {
+    await pc.setRemoteDescription({ type: 'offer', sdp: unpackSdp(m[2], 'actpass') });
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitIce(pc);
+    h.onAnswer(m[1] + '.' + packSdp(pc.localDescription.sdp));
+  })().catch((e) => end('Could not read the link: ' + (e && e.message || e)));
+  return { send: (x) => { if (dc && dc.readyState === 'open') dc.send(JSON.stringify(x)); }, close: () => { done = true; try { pc.close(); } catch (e) {} } };
 }
 
 /* ============ COORDINATOR ============ */
 function startCoordinator() {
   let id = '';
-  let via = 'peerjs', shards = 4;
-  try { const v = localStorage.getItem('via'); if (TRANSPORTS[v]) via = v; shards = +localStorage.getItem('shards') || 4; } catch (e) {}
+  let via = 'peerjs';
+  try { const v = localStorage.getItem('via'); if (TRANSPORTS[v]) via = v; } catch (e) {}
   app.innerHTML = `
     <h1>Light show coordinator</h1>
     <p class="sub">Phones join, you pick a track, the track plays here.</p>
@@ -424,13 +544,16 @@ function startCoordinator() {
       <div class="row"><span><span class="n" id="nphones">0</span> <span class="dim">phones</span></span><span><span class="n" id="ncomps">0</span> <span class="dim">computers</span></span><span class="dim">connected</span></div>
       <p id="status" class="dim">Connecting…</p>
       <label for="via">Connection type</label>
-      <div class="row" style="margin:6px 0">
-        <select id="via"></select>
-        <label id="shwrap" class="row" style="display:none;gap:8px">Shards <input class="num" type="number" id="shards" min="1" max="32" style="width:4.5em"></label>
-      </div>
+      <div class="row" style="margin:6px 0"><select id="via"></select></div>
       <p id="viaNote" class="dim" style="margin:0 0 14px;font-size:.9rem"></p>
       <div id="qr"></div>
       <p><code id="url"></code></p>
+      <div id="manual" style="display:none">
+        <div class="row"><button id="addLink">New phone link</button></div>
+        <div id="links"></div>
+        <label for="paste">Reply link from a phone (links opened in this browser are picked up automatically)</label>
+        <div class="row" style="margin-top:6px"><input class="num" id="paste" style="flex:1;min-width:0" placeholder="Paste a reply link here if needed"><button class="ghost" id="pasteBtn">Connect</button></div>
+      </div>
     </div>
     <div class="panel">
       <input type="file" id="file" accept="audio/*,video/*">
@@ -445,26 +568,52 @@ function startCoordinator() {
   const audio = $('#audio');
   const conns = new Set();
   const kinds = new Map();   // connection -> 'phone' | 'computer'
+  let compsCount = 0;   // connected computers: the fire blackout only happens when there is one
   const updateCount = () => {
     let comps = 0;
     conns.forEach((c) => { if (kinds.get(c) === 'computer') comps++; });
     $('#nphones').textContent = conns.size - comps;
     $('#ncomps').textContent = comps;
+    compsCount = comps;
   };
   let delay = 0;
 
   /* --- connection type: dropdown, QR code and join link follow it --- */
   const viaSel = $('#via');
   Object.entries(TRANSPORTS).forEach(([k, t]) => viaSel.add(new Option(t.label, k)));
-  viaSel.value = via; $('#shards').value = shards;
-  const joinUrl = () => location.origin + location.pathname + '?room=' + id +
-    (via !== 'peerjs' ? '&via=' + via : '') + (via === 'p2pjs' ? '&sh=' + shards : '');
+  viaSel.value = via;
+  const joinUrl = () => location.origin + location.pathname + '?room=' + id + (via !== 'peerjs' ? '&via=' + via : '');
   const showJoin = () => {
-    $('#url').textContent = joinUrl();
+    const man = !!TRANSPORTS[via].manual;
     $('#qr').innerHTML = '';
-    try { new QRCode($('#qr'), { text: joinUrl(), width: 180, height: 180 }); } catch (e) {}
+    $('#url').textContent = '';
+    if (!man) {
+      $('#url').textContent = joinUrl();
+      try { new QRCode($('#qr'), { text: joinUrl(), width: 180, height: 180 }); } catch (e) {}
+    }
+    $('#manual').style.display = man ? '' : 'none';
+    $('#links').innerHTML = '';
     $('#viaNote').textContent = TRANSPORTS[via].note;
-    $('#shwrap').style.display = via === 'p2pjs' ? '' : 'none';
+  };
+  const LINK_STATE = { preparing: 'Preparing…', waiting: 'Waiting for the phone’s reply link', connecting: 'Connecting…', connected: 'Connected ✓', failed: 'Connection failed, make a new link' };
+  const linkRows = new Map();
+  const onLink = (lid, code) => {
+    const url = joinUrl() + '#o=' + code;
+    const row = linkRows.get(lid) || { el: document.createElement('div') };
+    row.el.className = 'row'; row.el.style.margin = '8px 0';
+    row.el.innerHTML = '<span class="dim st"></span><button class="ghost cp">Copy link</button>' + (navigator.share ? '<button class="ghost sh">Share</button>' : '');
+    row.el.querySelector('.cp').onclick = async (e) => {
+      try { await navigator.clipboard.writeText(url); e.target.textContent = 'Copied ✓'; } catch (x) { prompt('Copy this link:', url); }
+      setTimeout(() => { e.target.textContent = 'Copy link'; }, 1500);
+    };
+    const sh = row.el.querySelector('.sh'); if (sh) sh.onclick = () => navigator.share({ url }).catch(() => {});
+    linkRows.set(lid, row); $('#links').appendChild(row.el); onLinkState(lid, 'waiting');
+  };
+  const onLinkState = (lid, st) => {
+    let row = linkRows.get(lid);
+    if (!row) { row = { el: document.createElement('div') }; row.el.className = 'row'; row.el.innerHTML = '<span class="dim st"></span>'; linkRows.set(lid, row); $('#links').appendChild(row.el); }
+    row.el.querySelector('.st').textContent = LINK_STATE[st] || st;
+    if (st === 'connected') row.el.querySelectorAll('button').forEach((b) => { b.style.display = 'none'; });
   };
   let current = null, token = 0;
   const attach = (conn) => {
@@ -479,13 +628,15 @@ function startCoordinator() {
   async function startVia(switched) {
     const my = ++token;
     if (current) { try { current.close(); } catch (e) {} current = null; }
-    conns.clear(); kinds.clear(); updateCount();
+    conns.clear(); kinds.clear(); updateCount(); linkRows.clear();
     id = 'lightshow-' + Math.random().toString(36).slice(2, 7);   // a fresh room for every (re)start, so old phones can't linger in it
     showJoin();
     $('#status').textContent = 'Connecting via ' + TRANSPORTS[via].label + '…';
     try {
-      const t = await hostTransport(via, id, shards, {
-        onReady: () => { if (my === token) $('#status').textContent = (switched ? 'Switched to ' + TRANSPORTS[via].label + '. Phones must rejoin with the new QR code or link.' : 'Ready. Scan the code or open the link on each phone.'); },
+      const t = await hostTransport(via, id, {
+        onLink: (lid, code) => { if (my === token) onLink(lid, code); },
+        onLinkState: (lid, st) => { if (my === token) onLinkState(lid, st); },
+        onReady: () => { if (my === token) $('#status').textContent = (switched ? 'Switched to ' + TRANSPORTS[via].label + '. Phones must rejoin with the new ' + (TRANSPORTS[via].manual ? 'links.' : 'QR code or link.') : (TRANSPORTS[via].manual ? 'Ready. Send a link to each phone.' : 'Ready. Scan the code or open the link on each phone.')); },
         onError: (msg) => { if (my === token) $('#status').textContent = msg; },
         onConnect: (conn) => { if (my === token) attach(conn); }
       });
@@ -502,7 +653,7 @@ function startCoordinator() {
   let est = [], lastCT = -1;
   (function tick() {
     const ct = audio.currentTime;
-    audio.classList.toggle('blackout', ct >= CLIP_START - 0.0005 && ct < CLIP_START + CLIP_DUR);
+    audio.classList.toggle('blackout', compsCount > 0 && ct >= CLIP_START - 0.0005 && ct < CLIP_START + CLIP_DUR);
     if (audio.paused) { est = []; lastCT = -1; }
     else if (audio.currentTime !== lastCT) {
       lastCT = audio.currentTime; est.push(rawT0());
@@ -538,11 +689,13 @@ function startCoordinator() {
     try { localStorage.setItem('via', via); } catch (e) {}
     startVia(true);
   });
-  $('#shards').addEventListener('change', () => {
-    shards = Math.max(1, Math.min(32, +$('#shards').value || 4)); $('#shards').value = shards;
-    try { localStorage.setItem('shards', shards); } catch (e) {}
-    if (via === 'p2pjs') startVia(true);
-  });
+  $('#addLink').addEventListener('click', () => { if (current && current.newLink) current.newLink().catch((e) => { $('#status').textContent = String(e && e.message || e); }); });
+  const usePaste = async () => {
+    const box = $('#paste');
+    if (!current || !current.accept) return;
+    try { await current.accept(box.value); box.value = ''; } catch (e) { $('#status').textContent = String(e && e.message || e); }
+  };
+  $('#pasteBtn').addEventListener('click', usePaste);
   startVia(false);
 }
 
@@ -553,6 +706,11 @@ function startPhone(roomId) {
     <p class="sub">Keep this screen on and turn the volume of your phone off – the sound comes from the main speakers.</p>
     <button class="big" id="go">Go fullscreen &amp; start</button>
     <p id="status" class="dim">Connecting…</p>
+    <div class="panel" id="answerBox" style="display:none">
+      <p style="margin-top:0">Send this reply link back to the coordinator:</p>
+      <div class="row"><button class="ghost" id="copyAns">Copy reply link</button><button class="ghost" id="shareAns" style="display:none">Share</button></div>
+      <p><code id="ansText"></code></p>
+    </div>
     <div class="panel">
       <label for="trim">Fine-tune this phone (ms, positive = later)</label>
       <div class="row"><input type="number" id="trim" value="0" step="10" style="width:6em"><span id="sync" class="dim"></span></div>
@@ -616,17 +774,27 @@ function startPhone(roomId) {
     ready = false;
     const my = ++gen;                       // ignore late events of an old connection
     status('Connecting…');
-    link = clientTransport(VIA, roomId, SHARDS, {
+    link = clientTransport(VIA, roomId, {
+      onAnswer: (code) => {                         // manual mode: show the reply link
+        if (my !== gen) return;
+        const url = location.origin + location.pathname + '#a=' + code;
+        $('#answerBox').style.display = ''; $('#ansText').textContent = url;
+        $('#copyAns').onclick = async (e) => { try { await navigator.clipboard.writeText(url); e.target.textContent = 'Copied ✓'; } catch (x) { prompt('Copy this link:', url); } };
+        if (navigator.share) { $('#shareAns').style.display = ''; $('#shareAns').onclick = () => navigator.share({ url }).catch(() => {}); }
+        status('Send the reply link to the coordinator…');
+      },
       onOpen: () => {
         if (my !== gen) return;
+        $('#answerBox').style.display = 'none';
         ready = true; status('Connected. Tap the button.', true);
         link.send({ type: 'hello', kind: IS_COMPUTER ? 'computer' : 'phone' });
         samples = []; burst();
       },
       onData: (m) => { if (my === gen && m) onData(m); },
-      onClose: (msg) => {
+      onClose: (msg, fatal) => {
         if (my !== gen || retryTimer) return;
         ready = false; status(msg || 'Disconnected. Retrying…');
+        if (fatal) return;                          // e.g. a manual link was used up: nothing to retry
         retryTimer = setTimeout(() => { retryTimer = null; connect(); }, 2000);
       }
     });
