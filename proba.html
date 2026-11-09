@@ -221,8 +221,6 @@ const $ = (s) => document.querySelector(s);
 const app = $('#app');
 const room = new URLSearchParams(location.search).get('room');
 const VIA = TRANSPORTS[new URLSearchParams(location.search).get('via')] ? new URLSearchParams(location.search).get('via') : 'peerjs';
-if (/[#&]a=/.test(location.hash)) startAnswerReceiver();      // someone opened a phone's reply link
-else room ? startPhone(room) : startCoordinator();
 
 function startAnswerReceiver() {
   const m = location.hash.match(/a=([a-z0-9]{4})\.([A-Za-z0-9_-]+)/);
@@ -934,6 +932,10 @@ function startPhone(roomId) {
 
   connect();
 }
+
+/* ============ START ============ (last, so every const above is initialised before any page code runs) */
+if (/[#&]a=/.test(location.hash)) startAnswerReceiver();      // someone opened a phone's reply link
+else room ? startPhone(room) : startCoordinator();
 </script>
 </body>
 </html>
