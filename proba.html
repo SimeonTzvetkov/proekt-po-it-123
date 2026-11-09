@@ -43,6 +43,8 @@
   body.running #light { display:block; }
   body.running .wrap { visibility:hidden; }
   body.running { background:#000; }
+  body.running, body.running * { cursor:none; }   /* fullscreen on a computer client: no mouse pointer over the show */
+  video.idle { cursor:none; }                      /* coordinator's fullscreen video: pointer hides when the mouse rests */
   @media (prefers-reduced-motion: reduce) { * { scroll-behavior:auto; } }
 </style>
 </head>
@@ -564,6 +566,14 @@ function startCoordinator() {
       <div class="row" style="margin-top:12px"><button class="ghost" id="test">Test flash</button><button class="ghost" id="resync">Resync clocks</button></div>
     </div>`;
   const audio = $('#audio');
+  let idleTimer = null;                              // hide the mouse pointer over the fullscreen video until the mouse moves again
+  const wakePointer = () => {
+    audio.classList.remove('idle'); clearTimeout(idleTimer);
+    if (document.fullscreenElement === audio || document.webkitFullscreenElement === audio) idleTimer = setTimeout(() => audio.classList.add('idle'), 1200);
+  };
+  audio.addEventListener('mousemove', wakePointer);
+  document.addEventListener('fullscreenchange', wakePointer);
+  document.addEventListener('webkitfullscreenchange', wakePointer);
   const conns = new Set();
   const kinds = new Map();   // connection -> 'phone' | 'computer'
   let compsCount = 0;   // connected computers: the fire blackout only happens when there is one
