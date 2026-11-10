@@ -36,6 +36,7 @@
   #status { min-height:1.5em; }
   /* phone light */
   video.blackout { filter: brightness(0); }
+  #fluid { position:fixed; inset:0; width:100%; height:100%; display:none; pointer-events:none; z-index:10; }
   #clip { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; background:#000; display:none; visibility:hidden; pointer-events:none; z-index:11; }
   body.running #clip { display:block; }
   body.running #clip.on { visibility:visible; }
@@ -50,6 +51,7 @@
 </head>
 <body>
 <canvas id="light" width="1" height="1"></canvas>
+<canvas id="fluid"></canvas>
 <video id="clip" muted playsinline preload="auto" disablepictureinpicture></video>
 <div class="wrap" id="app"></div>
 
@@ -190,6 +192,60 @@ function blueFrame(ev, t) {                    // -> { b, c } or null
   }
   return null;
 }
+/* ---- Calm 3D water for the quiet part (Three.js); replaces the plain dark blue where it can run ---- */
+const FLUID = { src: 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js', fps: 20, t0: 33.6, scale: 0.5 };
+// Audio features extracted in advance from song.opus, 20 per second from 0:33.6: loudness of the low / mid / high bands (0-35, base 36).
+// (Phones don't play the song, so the data travels inside the page instead of being analysed live on every phone.)
+const FLUID_FEATS = {
+  low: 'zzzvrpnnppnmkjhfdejpvyvjb51289emsxzxsqnnswzzzvrpopuzzzxrommnonlkihgedhnswzunga6102ajtyzqf7109krwxqjebelswyupmllnnmlkjiiijotxzxlb30037clqvzyurpptyzzzxspmlrwzzzwrompponljhfcadjqvzvphb73118gpwztjc618ipuyrommovyzzxtqnmpponljihfdinswytoiffedejouyzvspoquxyywponnryzzzvqnnnpqqpnmjheflqvyvlb400003dmtyxpjfaemrvytlga8fnsvxrmkklnnnmlkigfiotxzsg71017ahntyzvrolnrssttsssstwzzzzwsppppomkhfda9flrvxoha31200aipwwpd603alsytlkijqyzzzwspnopponmkjhghmswzxrjc73001ajtzxspmmrvyyxsnmmpuzzzwqmkklmmlkjhgedinswyqg7000004ckrxnb1003fowvpjd9elqvyuplklnonmljigffkpuwvjb411427ekszwrollqvyzzwspmmtxzzzwromoonmkigecaelrwysj91000009hryqg5002dntxoljimvxzzwspmloonmkigfdbhnswypf5000002dnwxtpmkotwxwtnllmrxzzysnkjklmmlkihgeglrvxvme610004dmtxsh40004gqxpd4004gpwxrnllmnnmmlkkihkpuxxqf830043aiquxqga789aa730245ae',
+  mid: 'd95116biqwxwqjc400697a30054bklnuvvvvuuuttsmjijlruvtmf92028dlsvvvme5003ckruqoopqstsrohgd47ghlvvtsrrrrnlha53006emuzzxtkfecelpqsoe9abiswroooppkgdbejf7acfozzytmg830000000012100019ktuvxxzzzzzzwrpifjoqxzzxxwwwzzxtpkfa64210003338208hknmljgkoprvwuutpmooptxxyywplghjptyyyyyxwvtsrnifa48dgmuvuxzzzzzzzrkje9gjlqvuvutuvxyzxupkea6300016ab9505ckpupjeghnuzwvtniklmswusoklnoruvutsqlf8100000423500477d902admvwwwrkhgfltyzvoighlqronnnrvutuuurled72680482250027doxyywusmebehnwzywxwxupjhhkqvwvuuuvvutmfb4033034029djsqkkc79d6dknqvpiebdhkjmopruttsrrqkffb78b37cgjpja9cenxzzzzzzytrrqquvttttqmfb9dmtyzzyyyxxyxtoia9bfmtsrssruwvvvqnia9einuurqssuvvvxxyvphb5038djrwyzzzxxwuslhhjpyzzzysne6aektzzyxwvuurqrsvzzzyzyxtmke75503bhovuuvwyzzxvtrpphcdgmtzxxvwxzzzzzvqjc6201016cgmpnjlnosxwuvvvwrkheemrmigedgfbbdhotsrq',
+  high: '6310003clqrwxtpf3006jrpuroqvttsnljiiioppqpfdddfjnpqjhd40379inoovytnc415aea8669cmklmjchkpzzzzvoheeeggg830000019iqrrwzzzztmiggghfkorvzxyzyxtnefgmrwmddbclurrqmke88b9950058eg70019nxsmjggoqpqslmoeelkktuooprsuvuroif71376620048bg00001c61212bimrsrrokgnpuzzzzzxmhddgptyzzyyxvtrptsruvjkonpwurpmjqsrrseacdhwxxxvqvxyzzxvspjg923768624djok8456frqtvrqqnoqpole5336clkgb88adimoonnke8987600001dl400004469ikuzzyywmlpquzzzzyxzxywrigebgnoptwxtpgjgb9905dbgjjlvyywtsuvuuvurvtppogikloogc98aimopqqqqprwtol9004ainea43dsnhh30060ckhipi9achlojjgeglihjijmi8fhfhh0001bne8633dkhijikoqlmnnnttpnmootspjgdefjlmonljpoolc0003dmihihluyxxwnlg68gfksqkmnrtwvurqpoideechlgkrrtwslnopspcbaajvxxvsqrphoqprzvrqopppihginwyzyxxwwwzxuqf0025gsqrtvxzzwutnltwxzzzzzzyywxwvvxvtpg88bcjicdjmuzvnmmnruvwxzzzzyxvvvshb878jpknoontuuu'
+};
+const FLUID_ARR = {}; for (const k in FLUID_FEATS) FLUID_ARR[k] = [...FLUID_FEATS[k]].map((c) => parseInt(c, 36) / 35);
+const FLUID_ONSETS = [34.55, 35.51, 36.16, 36.81, 38.09, 38.74, 39.39, 40.35, 41.32, 41.97, 43.25, 43.9, 44.55, 45.83, 46.48, 47.13, 47.77, 48.42, 49.06, 49.71, 50.42, 51.0, 51.64, 52.29, 52.94, 53.58, 54.23, 54.87, 55.62, 56.16, 56.8, 57.45, 58.1, 58.74, 59.38, 60.03, 61.0, 61.96, 62.61, 63.28, 63.9, 64.55, 65.19, 65.85, 66.48, 67.12, 67.77, 68.38, 69.06, 69.71, 70.35, 71.32, 72.29];   // soft beats in the quiet part: each one can send a ripple across the water
+const FLUID_VERT = `
+uniform float uTime; uniform float uLow; uniform vec4 uRip[4];
+varying vec3 vN; varying vec3 vW; varying float vH;
+vec2 hash2(vec2 p){ p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3))); return -1.0+2.0*fract(sin(p)*43758.5453123); }
+float gnoise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); vec2 u=f*f*(3.0-2.0*f);
+  return mix(mix(dot(hash2(i),f),dot(hash2(i+vec2(1.0,0.0)),f-vec2(1.0,0.0)),u.x),
+             mix(dot(hash2(i+vec2(0.0,1.0)),f-vec2(0.0,1.0)),dot(hash2(i+vec2(1.0,1.0)),f-vec2(1.0,1.0)),u.x),u.y); }
+float fbm(vec2 p){ float a=0.5; float s=0.0; for(int i=0;i<4;i++){ s+=a*gnoise(p); p=p*2.03+vec2(1.7,9.2); a*=0.5; } return s; }
+float height(vec2 p){
+  float t=uTime*0.045;
+  vec2 q=vec2(fbm(p*0.55+vec2(0.0,t)),fbm(p*0.55+vec2(5.2,1.3)-vec2(t,0.0)));   // domain warp = slow swirling currents
+  float h=fbm(p*0.75+q*1.8+vec2(t*0.8,-t*0.5));
+  for(int i=0;i<4;i++){
+    vec4 r=uRip[i]; float age=uTime-r.z;
+    if(age>0.0 && age<7.0){ float x=length(p-r.xy)-age*0.5; h+=r.w*0.10*exp(-x*x*3.0)*cos(x*8.0)*(1.0-age/7.0); }
+  }
+  return h;
+}
+void main(){
+  vec2 p=position.xz;
+  float amp=0.55+0.5*uLow;
+  float h=height(p), e=0.06;
+  float hx=height(p+vec2(e,0.0)), hz=height(p+vec2(0.0,e));
+  vN=normalize(vec3(-(hx-h)/e*amp,1.0,-(hz-h)/e*amp));
+  vH=h*amp;
+  vec4 wp=modelMatrix*vec4(p.x,vH,p.y,1.0); vW=wp.xyz;
+  gl_Position=projectionMatrix*viewMatrix*wp;
+}`;
+const FLUID_FRAG = `
+uniform float uBright; uniform float uMid; uniform float uHigh; uniform vec3 uTint;
+varying vec3 vN; varying vec3 vW; varying float vH;
+void main(){
+  vec3 N=normalize(vN); vec3 V=normalize(cameraPosition-vW);
+  float fres=pow(1.0-max(dot(N,V),0.0),3.0);
+  vec3 col=mix(vec3(0.005,0.03,0.10),vec3(0.02,0.20,0.34),smoothstep(-0.25,0.35,vH)*(0.6+0.4*uMid));
+  col+=mix(vec3(0.04,0.14,0.26),uTint,0.55)*fres*0.85;                          // sky glow at grazing angles
+  vec3 L=normalize(vec3(-0.35,0.45,-0.8));
+  col+=vec3(0.55,0.8,1.0)*pow(max(dot(reflect(-L,N),V),0.0),48.0)*(0.35+1.2*uHigh);   // soft glints, stronger with the highs
+  float dist=length(vW.xz-cameraPosition.xz);
+  col*=exp(-pow(dist*0.16,2.0));                                                 // the far water fades into darkness
+  col*=mix(vec3(1.0),uTint*1.6,0.45);
+  gl_FragColor=vec4(col*uBright,1.0);
+}`;
 const FL_IN = 0.120, FL_PEAK = 0.050, FL_OUT = 0.450;
 const quickFlash = (a) => a < -FL_IN ? 0 : a < 0 ? 1 + a / FL_IN : a < FL_PEAK ? 1 : a < FL_PEAK + FL_OUT ? 1 - (a - FL_PEAK) / FL_OUT : 0;
 const FPS = 24;
@@ -542,6 +598,7 @@ function startCoordinator() {
     <p class="sub">Phones join, you pick a track, the track plays here.</p>
     <div class="panel">
       <div class="row"><span><span class="n" id="nphones">0</span> <span class="dim">phones</span></span><span><span class="n" id="ncomps">0</span> <span class="dim">computers</span></span><span class="dim">connected</span></div>
+      <p id="vibLine" class="dim" style="margin:0 0 8px"></p>
       <p id="status" class="dim">Connecting…</p>
       <label for="via">Connection type</label>
       <div class="row" style="margin:6px 0"><select id="via"></select></div>
@@ -576,6 +633,7 @@ function startCoordinator() {
   document.addEventListener('webkitfullscreenchange', wakePointer);
   const conns = new Set();
   const kinds = new Map();   // connection -> 'phone' | 'computer'
+  const vibs = new Map();    // connection -> 'yes' | 'no' | 'none' | 'untested' (reported by the phone)
   let compsCount = 0;   // connected computers: the fire blackout only happens when there is one
   const updateCount = () => {
     let comps = 0;
@@ -583,6 +641,9 @@ function startCoordinator() {
     $('#nphones').textContent = conns.size - comps;
     $('#ncomps').textContent = comps;
     compsCount = comps;
+    let yes = 0, bad = 0, unk = 0;
+    conns.forEach((c) => { if (kinds.get(c) === 'computer') return; const v = vibs.get(c) || 'untested'; if (v === 'yes') yes++; else if (v === 'no' || v === 'none') bad++; else unk++; });
+    $('#vibLine').textContent = conns.size - comps > 0 ? 'Vibration on phones: ' + yes + ' confirmed, ' + bad + ' not working or unsupported, ' + unk + ' not tested yet' : '';
   };
   let delay = 0;
 
@@ -628,15 +689,16 @@ function startCoordinator() {
     conns.add(conn); updateCount();
     conn.onData = (m) => {
       if (m && m.type === 'ping') conn.send({ type: 'pong', t0: m.t0, th: performance.now() });
-      else if (m && m.type === 'hello') { kinds.set(conn, m.kind); updateCount(); }
+      else if (m && m.type === 'hello') { kinds.set(conn, m.kind); vibs.set(conn, m.vib || 'untested'); updateCount(); }
+      else if (m && m.type === 'vib') { vibs.set(conn, m.v); updateCount(); }
     };
-    conn.onClose = () => { conns.delete(conn); kinds.delete(conn); updateCount(); };
+    conn.onClose = () => { conns.delete(conn); kinds.delete(conn); vibs.delete(conn); updateCount(); };
     conn.send(config()); conn.send(state());
   };
   async function startVia(switched) {
     const my = ++token;
     if (current) { try { current.close(); } catch (e) {} current = null; }
-    conns.clear(); kinds.clear(); updateCount(); linkRows.clear();
+    conns.clear(); kinds.clear(); vibs.clear(); updateCount(); linkRows.clear();
     id = 'lightshow-' + Math.random().toString(36).slice(2, 7);   // a fresh room for every (re)start, so old phones can't linger in it
     showJoin();
     $('#status').textContent = 'Connecting via ' + TRANSPORTS[via].label + '…';
@@ -719,6 +781,13 @@ function startPhone(roomId) {
       <div class="row"><button class="ghost" id="copyAns">Copy reply link</button><button class="ghost" id="shareAns" style="display:none">Share</button></div>
       <p><code id="ansText"></code></p>
     </div>
+    <div class="panel" id="vibBox">
+      <strong>Check your vibration before the show</strong>
+      <p id="vibMsg" style="margin:8px 0"></p>
+      <div class="row"><button class="ghost" id="vibTest">Test vibration</button></div>
+      <div id="vibAsk" style="display:none;margin-top:10px"><div class="row"><button class="ghost" id="vibYes">Yes, it vibrated</button><button class="ghost" id="vibNo">No</button></div></div>
+      <p id="vibHelp" class="dim" style="display:none;margin:10px 0 0;font-size:.9rem"></p>
+    </div>
     <div class="panel">
       <label for="trim">Fine-tune this phone (ms, positive = later)</label>
       <div class="row"><input type="number" id="trim" value="0" step="10" style="width:6em"><span id="sync" class="dim"></span></div>
@@ -726,6 +795,60 @@ function startPhone(roomId) {
   const status = (t, ok) => { const s = $('#status'); s.textContent = t; s.style.color = ok ? 'var(--ok)' : ''; };
   const light = $('#light'), ctx = light.getContext('2d');
   const clip = $('#clip');
+
+  /* --- calm 3D water (Three.js): a displaced water surface seen at a low angle, driven by the song's low/mid/high loudness --- */
+  const fluidCanvas = $('#fluid');
+  let fluid = null;                                     // stays null if Three.js or WebGL is unavailable: the plain dark blue is used then
+  (function initFluid() {
+    const sc = document.createElement('script');
+    sc.src = FLUID.src;
+    sc.onload = () => {
+      try {
+        const renderer = new THREE.WebGLRenderer({ canvas: fluidCanvas, antialias: false, alpha: false, powerPreference: 'low-power' });
+        renderer.setPixelRatio(1);
+        const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(55, 1, 0.1, 40);
+        const geo = new THREE.PlaneGeometry(14, 14, 90, 90); geo.rotateX(-Math.PI / 2);
+        const rip = []; for (let i = 0; i < 4; i++) rip.push(new THREE.Vector4(0, 0, -100, 0));
+        const mat = new THREE.ShaderMaterial({
+          vertexShader: FLUID_VERT, fragmentShader: FLUID_FRAG,
+          uniforms: { uTime: { value: 0 }, uLow: { value: 0.5 }, uMid: { value: 0.5 }, uHigh: { value: 0.5 }, uBright: { value: 0 }, uTint: { value: new THREE.Vector3(0.3, 0.6, 1) }, uRip: { value: rip } }
+        });
+        scene.add(new THREE.Mesh(geo, mat));
+        const resize = () => {
+          const w = Math.max(2, Math.round(innerWidth * FLUID.scale)), h = Math.max(2, Math.round(innerHeight * FLUID.scale));   // half resolution: calm and cheap
+          renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+        };
+        resize(); addEventListener('resize', resize);
+        fluid = { renderer, scene, camera, mat, rip, on: false, ripNext: 0, ripSlot: 0, lastT: -1 };
+        renderer.render(scene, camera);                 // compile the shader now, not in the middle of the show
+      } catch (e) { fluid = null; }
+    };
+    document.head.appendChild(sc);
+  })();
+  function fluidHide() { if (fluid && fluid.on) { fluidCanvas.style.display = 'none'; fluid.on = false; } }
+  function fluidFrame(t, bl) {                          // -> true when the water handled this frame
+    if (!fluid) return false;
+    if (!bl || bl.b < 0.004) { fluidHide(); fluid.lastT = -1; return true; }
+    if (!fluid.on) { fluidCanvas.style.display = 'block'; fluid.on = true; }
+    const u = fluid.mat.uniforms, n = FLUID_ARR.low.length;
+    const fi = (t - FLUID.t0) * FLUID.fps, i0 = Math.max(0, Math.min(n - 2, Math.floor(fi))), f = Math.max(0, Math.min(1, fi - i0));
+    const g = (a) => a[i0] + (a[i0 + 1] - a[i0]) * f;
+    u.uLow.value = g(FLUID_ARR.low); u.uMid.value = g(FLUID_ARR.mid); u.uHigh.value = g(FLUID_ARR.high);
+    u.uTime.value = t; u.uBright.value = Math.min(1, bl.b / 0.7);
+    u.uTint.value.set(bl.c[0] / 255, bl.c[1] / 255, bl.c[2] / 255);
+    if (fluid.lastT < 0 || Math.abs(t - fluid.lastT) > 1) {          // (re)start or seek: find the next beat
+      fluid.ripNext = FLUID_ONSETS.findIndex((o) => o > t - 0.05); if (fluid.ripNext < 0) fluid.ripNext = FLUID_ONSETS.length;
+    }
+    fluid.lastT = t;
+    while (fluid.ripNext < FLUID_ONSETS.length && FLUID_ONSETS[fluid.ripNext] <= t) {
+      const o = FLUID_ONSETS[fluid.ripNext++];
+      if (t - o < 0.4 && Math.random() < 0.6) fluid.rip[fluid.ripSlot++ % 4].set((Math.random() - 0.5) * 6, 0.5 - Math.random() * 4.5, o, 0.5 + Math.random() * 0.5);
+    }
+    const c = fluid.camera;
+    c.position.set(Math.sin(t * 0.05) * 0.7, 0.85 + Math.sin(t * 0.037) * 0.1, 3); c.lookAt(0, 0, -1.8);       // slow drift
+    fluid.renderer.render(fluid.scene, c);
+    return true;
+  }
   light.width = FW; light.height = FH;
   if (IS_COMPUTER) { clip.muted = true; clip.src = CLIP_SRC; clip.load(); }
   function updateClip(t) {
@@ -757,6 +880,34 @@ function startPhone(roomId) {
   rollFlashes();
   let link = null, ready = false, gen = 0, retryTimer = null, wakeLock = null;
   let trim = 0;
+
+  /* --- vibration check: say clearly whether this device can vibrate, and let the person test it --- */
+  let vibState = typeof navigator.vibrate === 'function' ? 'untested' : 'none';
+  (function vibrationCheck() {
+    const box = $('#vibBox'), msg = $('#vibMsg'), help = $('#vibHelp'), ask = $('#vibAsk'), test = $('#vibTest');
+    if (IS_COMPUTER) { box.style.display = 'none'; return; }
+    const ua = navigator.userAgent;
+    const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+    const inApp = /FBAN|FBAV|Instagram|Line\/|MicroMessenger|Telegram|WhatsApp|Viber|; wv\)/i.test(ua);
+    if (vibState === 'none') {
+      msg.textContent = ios
+        ? 'iPhones and iPads (Safari) don’t let websites vibrate, so this device will only show the light show. Nothing is wrong with your phone.'
+        : 'This browser can’t vibrate, so you will only see the light show. On an Android phone, open this page in Chrome to get vibration.';
+      test.style.display = 'none';
+      return;
+    }
+    msg.textContent = 'Tap “Test vibration” and check that your phone buzzes. ' + (inApp ? '⚠ You seem to be inside another app’s built-in browser, where vibration often does not work. Open this link in Chrome if it doesn’t buzz.' : '');
+    const report = (v) => { vibState = v; if (link && ready) link.send({ type: 'vib', v }); };
+    const helpText = 'If it didn’t buzz, check this: (1) turn off silent mode and Do Not Disturb, because on many phones they also block web vibration; (2) make sure vibration / touch feedback is switched on in the phone settings; (3) turn off battery saver; (4) open the link in Chrome, not inside a chat or social app; then reload and test again.';
+    test.onclick = () => {
+      help.style.display = 'none';
+      const ok = navigator.vibrate([200, 120, 200, 120, 450]);
+      if (ok === false) { msg.textContent = 'The browser refused to vibrate.'; help.textContent = helpText; help.style.display = ''; ask.style.display = 'none'; report('no'); }
+      else { msg.textContent = 'Did your phone vibrate (a short buzz-buzz-buzz)?'; ask.style.display = ''; }
+    };
+    $('#vibYes').onclick = () => { ask.style.display = 'none'; help.style.display = 'none'; msg.textContent = 'Great, vibration works on this phone.'; report('yes'); };
+    $('#vibNo').onclick = () => { ask.style.display = 'none'; msg.textContent = 'No vibration yet.'; help.textContent = helpText; help.style.display = ''; report('no'); };
+  })();
   try { trim = +localStorage.getItem('trim') || 0; $('#trim').value = trim; } catch (e) {}
   $('#trim').addEventListener('input', (e) => {
     trim = +e.target.value || 0;
@@ -795,7 +946,7 @@ function startPhone(roomId) {
         if (my !== gen) return;
         $('#answerBox').style.display = 'none';
         ready = true; status('Connected. Tap the button.', true);
-        link.send({ type: 'hello', kind: IS_COMPUTER ? 'computer' : 'phone' });
+        link.send({ type: 'hello', kind: IS_COMPUTER ? 'computer' : 'phone', vib: vibState });
         samples = []; burst();
       },
       onData: (m) => { if (my === gen && m) onData(m); },
@@ -905,8 +1056,9 @@ function startPhone(roomId) {
         if (f > b) { b = f; col = e.c; }
       }
       const bl = blueFrame(blue, t);
-      if (bl && bl.b > b) { b = bl.b; col = bl.c; }
+      if (!fluidFrame(t, bl) && bl && bl.b > b) { b = bl.b; col = bl.c; }   // 3D water if available, otherwise the plain dark blue
     }
+    if (!(T0 !== null && synced())) fluidHide();
     const tf = env(performance.now() - testStart);
     if (tf > b) { b = tf; col = [255, 255, 255]; }
     ctx.fillStyle = `rgb(${Math.round(col[0] * b)},${Math.round(col[1] * b)},${Math.round(col[2] * b)})`;
