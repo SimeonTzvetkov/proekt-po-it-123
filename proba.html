@@ -36,7 +36,6 @@
   #status { min-height:1.5em; }
   /* phone light */
   video.blackout { filter: brightness(0); }
-  #fluid { position:fixed; inset:0; width:100%; height:100%; display:none; pointer-events:none; z-index:10; }
   #vclip { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; background:#000; display:none; visibility:hidden; pointer-events:none; z-index:11; }
   body.running #vclip { display:block; }
   body.running #vclip.on { visibility:visible; }
@@ -55,7 +54,6 @@
 </head>
 <body>
 <canvas id="light" width="1" height="1"></canvas>
-<canvas id="fluid"></canvas>
 <canvas id="confetti"></canvas>
 <video id="clip" muted playsinline preload="auto" disablepictureinpicture></video>
 <video id="vclip" muted playsinline preload="auto" disablepictureinpicture></video>
@@ -165,93 +163,43 @@ function chaosMask(t) {                            // 1 inside a section, linear
   return 0;
 }
 
-/* ---- Slow dark-blue atmosphere (only on some devices) ---- */
-const BLUE_START = 33.60, BLUE_END = 72.30;   // 0:33.60 - 1:12.30
-const BLUE_CHANCE = 0.33;                      // share of devices lit at any given moment (every device takes part, in its own rhythm)
-const BLUE_SWELL = [4.5, 9];                   // seconds a swell lasts
-const BLUE_FADE_IN = 2.5, BLUE_FADE_OUT = 3.0; // seconds; it is fully dark again before the white vibration returns
-const smooth01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
-function buildBlue() {                         // a slow, out-of-phase series of dark-blue swells for this device
+/* ---- Slow black-blue-black gradient that sweeps across the screen, on some devices at a time ---- */
+const GRADIENT_SECTIONS = [
+  { start: 32.95, end: 72.30, dir: 1 },      // 0:32.95 - 1:12.30, up to the sudden white: sweeps left to right
+  { start: 142.55, end: 163.61, dir: -1 }    // 2:22.55 - 2:43.61: sweeps right to left; then plain black until the confetti
+];
+const GRADIENT_CHANCE = 0.45;                // share of devices showing a sweep at any moment (every device gets its own sweeps)
+const GRADIENT_SWEEP = [5, 9];               // seconds one sweep takes to cross the screen
+const GRADIENT_FADE_IN = 1.5;                // seconds: devices that are mid-sweep when a section starts fade in gently (the end is a hard cut)
+const GRADIENT_STOPS = [[0, 0], [0.15, 0.06], [0.3, 0.3], [0.5, 1], [0.7, 0.3], [0.85, 0.06], [1, 0]];   // black -> blue -> black, soft edges
+function buildGradient() {                   // this device's own, out-of-step series of sweeps
   const r = (lo, hi) => lo + Math.random() * (hi - lo);
-  const color = () => hsl(r(206, 232), 0.95, 0.42);   // between deep navy and ocean blue
-  const meanLen = (BLUE_SWELL[0] + BLUE_SWELL[1]) / 2;
-  const meanGap = meanLen * (1 - BLUE_CHANCE) / BLUE_CHANCE;
-  const swell = (t) => ({ t, d: r(BLUE_SWELL[0], BLUE_SWELL[1]), p: r(0.35, 0.7), c1: color(), c2: color() });
+  const meanLen = (GRADIENT_SWEEP[0] + GRADIENT_SWEEP[1]) / 2, meanGap = meanLen * (1 - GRADIENT_CHANCE) / GRADIENT_CHANCE;
   const ev = [];
-  let t = BLUE_START - Math.random() * (meanLen + meanGap);   // random phase, so devices are out of step
-  while (t < BLUE_END) {
-    const e = swell(t);
-    if (t + e.d > BLUE_START) ev.push(e);
-    t += e.d + meanGap * r(0.4, 1.6);
-  }
-  if (!ev.length) ev.push(swell(r(BLUE_START, BLUE_END - BLUE_SWELL[1])));   // nobody sits it out
+  GRADIENT_SECTIONS.forEach((sec) => {
+    const sweep = (t) => ({ t, d: r(GRADIENT_SWEEP[0], GRADIENT_SWEEP[1]), w: r(0.75, 1.1), p: r(0.55, 0.9), c1: hsl(r(206, 232), 0.95, 0.42), c2: hsl(r(206, 232), 0.95, 0.42), dir: sec.dir, end: sec.end });
+    let t = sec.start - Math.random() * (meanLen + meanGap);       // random phase: devices do not sweep in unison
+    while (t < sec.end - 1) {
+      const e = sweep(t);
+      if (t + e.d > sec.start) ev.push(e);
+      t += e.d + meanGap * r(0.4, 1.6);
+    }
+    if (!ev.some((e) => e.end === sec.end)) ev.push(sweep(r(sec.start, sec.end - GRADIENT_SWEEP[1])));   // everybody takes part
+  });
   return ev;
 }
-function blueFrame(ev, t) {                    // -> { b, c } or null
-  if (!ev || t < BLUE_START || t > BLUE_END) return null;
-  const env = smooth01((t - BLUE_START) / BLUE_FADE_IN) * smooth01((BLUE_END - t) / BLUE_FADE_OUT);
+function gradientFrame(ev, t) {              // -> { x0, x1, k, c } (the band, as fractions of the screen width) or null
+  const sec = GRADIENT_SECTIONS.find((s) => t >= s.start && t <= s.end);
+  if (!sec) return null;
   for (const e of ev) {
     const a = t - e.t;
-    if (a < 0 || a > e.d) continue;
-    const x = a / e.d, sn = Math.sin(Math.PI * x);
-    return { b: env * e.p * sn * sn, c: e.c1.map((v, i) => Math.round(v + (e.c2[i] - v) * x)) };   // smooth swell, colour drifts
+    if (a < 0 || a > e.d || e.end !== sec.end) continue;
+    const x = a / e.d, cx = e.dir > 0 ? -e.w / 2 + x * (1 + e.w) : 1 + e.w / 2 - x * (1 + e.w);   // the band enters at one edge and leaves at the other
+    const fadeIn = Math.min(1, (t - sec.start) / GRADIENT_FADE_IN);
+    return { x0: cx - e.w / 2, x1: cx + e.w / 2, k: e.p * fadeIn, c: e.c1.map((v, i) => v + (e.c2[i] - v) * x) };   // colour drifts a little between two blues
   }
   return null;
 }
-/* ---- Calm 3D water for the quiet part (Three.js); replaces the plain dark blue where it can run ---- */
-const FLUID = { src: 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js', fps: 20, t0: 33.6, scale: 0.5 };
-// Audio features extracted in advance from song.opus, 20 per second from 0:33.6: loudness of the low / mid / high bands (0-35, base 36).
-// (Phones don't play the song, so the data travels inside the page instead of being analysed live on every phone.)
-const FLUID_FEATS = {
-  low: 'zzzvrpnnppnmkjhfdejpvyvjb51289emsxzxsqnnswzzzvrpopuzzzxrommnonlkihgedhnswzunga6102ajtyzqf7109krwxqjebelswyupmllnnmlkjiiijotxzxlb30037clqvzyurpptyzzzxspmlrwzzzwrompponljhfcadjqvzvphb73118gpwztjc618ipuyrommovyzzxtqnmpponljihfdinswytoiffedejouyzvspoquxyywponnryzzzvqnnnpqqpnmjheflqvyvlb400003dmtyxpjfaemrvytlga8fnsvxrmkklnnnmlkigfiotxzsg71017ahntyzvrolnrssttsssstwzzzzwsppppomkhfda9flrvxoha31200aipwwpd603alsytlkijqyzzzwspnopponmkjhghmswzxrjc73001ajtzxspmmrvyyxsnmmpuzzzwqmkklmmlkjhgedinswyqg7000004ckrxnb1003fowvpjd9elqvyuplklnonmljigffkpuwvjb411427ekszwrollqvyzzwspmmtxzzzwromoonmkigecaelrwysj91000009hryqg5002dntxoljimvxzzwspmloonmkigfdbhnswypf5000002dnwxtpmkotwxwtnllmrxzzysnkjklmmlkihgeglrvxvme610004dmtxsh40004gqxpd4004gpwxrnllmnnmmlkkihkpuxxqf830043aiquxqga789aa730245ae',
-  mid: 'd95116biqwxwqjc400697a30054bklnuvvvvuuuttsmjijlruvtmf92028dlsvvvme5003ckruqoopqstsrohgd47ghlvvtsrrrrnlha53006emuzzxtkfecelpqsoe9abiswroooppkgdbejf7acfozzytmg830000000012100019ktuvxxzzzzzzwrpifjoqxzzxxwwwzzxtpkfa64210003338208hknmljgkoprvwuutpmooptxxyywplghjptyyyyyxwvtsrnifa48dgmuvuxzzzzzzzrkje9gjlqvuvutuvxyzxupkea6300016ab9505ckpupjeghnuzwvtniklmswusoklnoruvutsqlf8100000423500477d902admvwwwrkhgfltyzvoighlqronnnrvutuuurled72680482250027doxyywusmebehnwzywxwxupjhhkqvwvuuuvvutmfb4033034029djsqkkc79d6dknqvpiebdhkjmopruttsrrqkffb78b37cgjpja9cenxzzzzzzytrrqquvttttqmfb9dmtyzzyyyxxyxtoia9bfmtsrssruwvvvqnia9einuurqssuvvvxxyvphb5038djrwyzzzxxwuslhhjpyzzzysne6aektzzyxwvuurqrsvzzzyzyxtmke75503bhovuuvwyzzxvtrpphcdgmtzxxvwxzzzzzvqjc6201016cgmpnjlnosxwuvvvwrkheemrmigedgfbbdhotsrq',
-  high: '6310003clqrwxtpf3006jrpuroqvttsnljiiioppqpfdddfjnpqjhd40379inoovytnc415aea8669cmklmjchkpzzzzvoheeeggg830000019iqrrwzzzztmiggghfkorvzxyzyxtnefgmrwmddbclurrqmke88b9950058eg70019nxsmjggoqpqslmoeelkktuooprsuvuroif71376620048bg00001c61212bimrsrrokgnpuzzzzzxmhddgptyzzyyxvtrptsruvjkonpwurpmjqsrrseacdhwxxxvqvxyzzxvspjg923768624djok8456frqtvrqqnoqpole5336clkgb88adimoonnke8987600001dl400004469ikuzzyywmlpquzzzzyxzxywrigebgnoptwxtpgjgb9905dbgjjlvyywtsuvuuvurvtppogikloogc98aimopqqqqprwtol9004ainea43dsnhh30060ckhipi9achlojjgeglihjijmi8fhfhh0001bne8633dkhijikoqlmnnnttpnmootspjgdefjlmonljpoolc0003dmihihluyxxwnlg68gfksqkmnrtwvurqpoideechlgkrrtwslnopspcbaajvxxvsqrphoqprzvrqopppihginwyzyxxwwwzxuqf0025gsqrtvxzzwutnltwxzzzzzzyywxwvvxvtpg88bcjicdjmuzvnmmnruvwxzzzzyxvvvshb878jpknoontuuu'
-};
-const FLUID_ARR = {}; for (const k in FLUID_FEATS) FLUID_ARR[k] = [...FLUID_FEATS[k]].map((c) => parseInt(c, 36) / 35);
-const FLUID_ONSETS = [34.55, 35.51, 36.16, 36.81, 38.09, 38.74, 39.39, 40.35, 41.32, 41.97, 43.25, 43.9, 44.55, 45.83, 46.48, 47.13, 47.77, 48.42, 49.06, 49.71, 50.42, 51.0, 51.64, 52.29, 52.94, 53.58, 54.23, 54.87, 55.62, 56.16, 56.8, 57.45, 58.1, 58.74, 59.38, 60.03, 61.0, 61.96, 62.61, 63.28, 63.9, 64.55, 65.19, 65.85, 66.48, 67.12, 67.77, 68.38, 69.06, 69.71, 70.35, 71.32, 72.29];   // soft beats in the quiet part: each one can send a ripple across the water
-const FLUID_VERT = `
-uniform float uTime; uniform float uLow; uniform vec4 uRip[4];
-varying vec3 vN; varying vec3 vW; varying float vH;
-vec2 hash2(vec2 p){ p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3))); return -1.0+2.0*fract(sin(p)*43758.5453123); }
-float gnoise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); vec2 u=f*f*(3.0-2.0*f);
-  return mix(mix(dot(hash2(i),f),dot(hash2(i+vec2(1.0,0.0)),f-vec2(1.0,0.0)),u.x),
-             mix(dot(hash2(i+vec2(0.0,1.0)),f-vec2(0.0,1.0)),dot(hash2(i+vec2(1.0,1.0)),f-vec2(1.0,1.0)),u.x),u.y); }
-float fbm(vec2 p){ float a=0.5; float s=0.0; for(int i=0;i<4;i++){ s+=a*gnoise(p); p=p*2.03+vec2(1.7,9.2); a*=0.5; } return s; }
-float height(vec2 p){
-  float t=uTime*0.045;
-  vec2 q=vec2(fbm(p*0.55+vec2(0.0,t)),fbm(p*0.55+vec2(5.2,1.3)-vec2(t,0.0)));   // domain warp = slow swirling currents
-  float h=fbm(p*0.75+q*1.8+vec2(t*0.8,-t*0.5));
-  for(int i=0;i<4;i++){
-    vec4 r=uRip[i]; float age=uTime-r.z;
-    if(age>0.0 && age<7.0){ float x=length(p-r.xy)-age*0.5; h+=r.w*0.10*exp(-x*x*3.0)*cos(x*8.0)*(1.0-age/7.0); }
-  }
-  return h;
-}
-void main(){
-  vec2 p=position.xz;
-  float amp=0.55+0.5*uLow;
-  float h=height(p), e=0.06;
-  float hx=height(p+vec2(e,0.0)), hz=height(p+vec2(0.0,e));
-  vN=normalize(vec3(-(hx-h)/e*amp,1.0,-(hz-h)/e*amp));
-  vH=h*amp;
-  vec4 wp=modelMatrix*vec4(p.x,vH,p.y,1.0); vW=wp.xyz;
-  gl_Position=projectionMatrix*viewMatrix*wp;
-}`;
-const FLUID_FRAG = `
-uniform float uBright; uniform float uMid; uniform float uHigh; uniform vec3 uTint;
-varying vec3 vN; varying vec3 vW; varying float vH;
-void main(){
-  vec3 N=normalize(vN); vec3 V=normalize(cameraPosition-vW);
-  float fres=pow(1.0-max(dot(N,V),0.0),3.0);
-  vec3 col=mix(vec3(0.005,0.03,0.10),vec3(0.02,0.20,0.34),smoothstep(-0.25,0.35,vH)*(0.6+0.4*uMid));
-  col+=mix(vec3(0.04,0.14,0.26),uTint,0.55)*fres*0.85;                          // sky glow at grazing angles
-  vec3 L=normalize(vec3(-0.35,0.45,-0.8));
-  col+=vec3(0.55,0.8,1.0)*pow(max(dot(reflect(-L,N),V),0.0),48.0)*(0.35+1.2*uHigh);   // soft glints, stronger with the highs
-  float dist=length(vW.xz-cameraPosition.xz);
-  col*=exp(-pow(dist*0.16,2.0));                                                 // the far water fades into darkness
-  col*=mix(vec3(1.0),uTint*1.6,0.45);
-  gl_FragColor=vec4(col*uBright,1.0);
-}`;
 const FL_IN = 0.120, FL_PEAK = 0.050, FL_OUT = 0.450;
 const quickFlash = (a) => a < -FL_IN ? 0 : a < 0 ? 1 + a / FL_IN : a < FL_PEAK ? 1 : a < FL_PEAK + FL_OUT ? 1 - (a - FL_PEAK) / FL_OUT : 0;
 const FPS = 24;
@@ -287,8 +235,9 @@ const VCLIP = {
   codec: 'av01.0.12M.08',             // AV1 Main profile, level 5.0, 8-bit: change it if your file was encoded differently
   pre: 0.25                           // start the decoder this many seconds early so the first frame is on time
 };
-/* ---- Confetti for the guitar riffs: 2:45 until the fire video starts (computers) / the vertical fire video starts (phones) ---- */
+/* ---- Confetti for the guitar riffs: 2:45 until 3:04.180 on computers (a little black before the fire video) / until the vertical fire video on phones ---- */
 const CONFETTI_START = 165.0;
+const CONFETTI_END_PC = 184.180;
 // The guitar notes, tapped along to the song starting at 2:45.24 (63 taps).
 // [your tap time, same tap snapped to the nearest transient in song.opus (within 70 ms), strength 0-1 from the audio]
 const CONFETTI_SNAP = true;   // true: use the snapped time (removes the jitter of tapping); false: use the raw tap times
@@ -329,7 +278,7 @@ function buildConfetti() {    // every device scatters its own pieces, so no two
   }
   return out;
 }
-const BUILD = '2026-11-11 confetti on tapped notes, cached pile';   // shown at the bottom of the page: check it after uploading, browsers cache old copies
+const BUILD = '2026-11-11 gradient sweeps, no 3D, confetti ends 3:04.18';   // shown at the bottom of the page: check it after uploading, browsers cache old copies
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
 
@@ -942,15 +891,15 @@ function startPhone(roomId) {
   const confCanvas = $('#confetti'), cctx = confCanvas.getContext('2d');
   const pile = document.createElement('canvas'), pctx = pile.getContext('2d');
   let confOn = false, pileIdx = 0, confLastT = null;
-  function drawPiece(c, p, pop, age, u) {
-    c.save(); c.translate(p.x * confCanvas.width, p.y * confCanvas.height); c.rotate(p.a); c.scale(pop, pop);
+  function drawPiece(c, p, age, u) {
+    c.save(); c.translate(p.x * confCanvas.width, p.y * confCanvas.height); c.rotate(p.a);
     c.fillStyle = 'rgba(0,0,0,0.4)'; c.fillRect(-p.l * u / 2 + 0.35 * u, -p.w * u / 2 + 0.35 * u, p.l * u, p.w * u);   // little shadow, so the stack has depth
     c.fillStyle = p.c; c.fillRect(-p.l * u / 2, -p.w * u / 2, p.l * u, p.w * u);
     if (age < 0.07) { c.fillStyle = 'rgba(255,255,255,' + (0.7 * (1 - age / 0.07)).toFixed(2) + ')'; c.fillRect(-p.l * u / 2, -p.w * u / 2, p.l * u, p.w * u); }   // flash as it lands
     c.restore();
   }
   function confettiFrame(t) {
-    const end = IS_COMPUTER ? CLIP_START : VCLIP.start;            // right before the (vertical) fire video
+    const end = IS_COMPUTER ? CONFETTI_END_PC : VCLIP.start;       // everything disappears at once, before the (vertical) fire video
     if (t === null || t < CONFETTI_START || t >= end) { if (confOn) { confCanvas.style.display = 'none'; confOn = false; } confLastT = null; pileIdx = 0; return; }
     if (!confOn) { confCanvas.style.display = 'block'; confOn = true; }
     const k = Math.min(window.devicePixelRatio || 1, 2), W = Math.round(innerWidth * k), H = Math.round(innerHeight * k);
@@ -958,13 +907,10 @@ function startPhone(roomId) {
     if (confLastT === null || t < confLastT - 0.02) { pctx.clearRect(0, 0, W, H); pileIdx = 0; }    // start or seek backwards: rebuild the pile
     confLastT = t;
     const u = Math.min(W, H) / 100;
-    while (pileIdx < confetti.length && confetti[pileIdx].t <= t - 0.1) drawPiece(pctx, confetti[pileIdx++], 1, 1, u);   // landed: bake into the pile
+    while (pileIdx < confetti.length && confetti[pileIdx].t <= t - 0.1) drawPiece(pctx, confetti[pileIdx++], 1, u);   // landed: bake into the pile
     cctx.fillStyle = '#000'; cctx.fillRect(0, 0, W, H);
     cctx.drawImage(pile, 0, 0);
-    for (let i = pileIdx; i < confetti.length && confetti[i].t <= t; i++) {                       // the newest pieces: pop + flash
-      const age = t - confetti[i].t;
-      drawPiece(cctx, confetti[i], 1 + 0.45 * Math.pow(1 - age / 0.1, 2), age, u);
-    }
+    for (let i = pileIdx; i < confetti.length && confetti[i].t <= t; i++) drawPiece(cctx, confetti[i], t - confetti[i].t, u);   // the newest pieces appear instantly (with a brief flash)
   }
   let vclipReady = false, vclipFallback = false;
   async function pickVerticalClip() {                    // 2160 if the screen is big enough AND the browser decodes 1214x2160 AV1 24 fps smoothly
@@ -1001,59 +947,6 @@ function startPhone(roomId) {
     vclip.classList.toggle('on', portrait && ct >= 0 && ct < dur);
   }
 
-  /* --- calm 3D water (Three.js): a displaced water surface seen at a low angle, driven by the song's low/mid/high loudness --- */
-  const fluidCanvas = $('#fluid');
-  let fluid = null;                                     // stays null if Three.js or WebGL is unavailable: the plain dark blue is used then
-  (function initFluid() {
-    const sc = document.createElement('script');
-    sc.src = FLUID.src;
-    sc.onload = () => {
-      try {
-        const renderer = new THREE.WebGLRenderer({ canvas: fluidCanvas, antialias: false, alpha: false, powerPreference: 'low-power' });
-        renderer.setPixelRatio(1);
-        const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(55, 1, 0.1, 40);
-        const geo = new THREE.PlaneGeometry(14, 14, 90, 90); geo.rotateX(-Math.PI / 2);
-        const rip = []; for (let i = 0; i < 4; i++) rip.push(new THREE.Vector4(0, 0, -100, 0));
-        const mat = new THREE.ShaderMaterial({
-          vertexShader: FLUID_VERT, fragmentShader: FLUID_FRAG,
-          uniforms: { uTime: { value: 0 }, uLow: { value: 0.5 }, uMid: { value: 0.5 }, uHigh: { value: 0.5 }, uBright: { value: 0 }, uTint: { value: new THREE.Vector3(0.3, 0.6, 1) }, uRip: { value: rip } }
-        });
-        scene.add(new THREE.Mesh(geo, mat));
-        const resize = () => {
-          const w = Math.max(2, Math.round(innerWidth * FLUID.scale)), h = Math.max(2, Math.round(innerHeight * FLUID.scale));   // half resolution: calm and cheap
-          renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
-        };
-        resize(); addEventListener('resize', resize);
-        fluid = { renderer, scene, camera, mat, rip, on: false, ripNext: 0, ripSlot: 0, lastT: -1 };
-        renderer.render(scene, camera);                 // compile the shader now, not in the middle of the show
-      } catch (e) { fluid = null; }
-    };
-    document.head.appendChild(sc);
-  })();
-  function fluidHide() { if (fluid && fluid.on) { fluidCanvas.style.display = 'none'; fluid.on = false; } }
-  function fluidFrame(t, bl) {                          // -> true when the water handled this frame
-    if (!fluid) return false;
-    if (!bl || bl.b < 0.004) { fluidHide(); fluid.lastT = -1; return true; }
-    if (!fluid.on) { fluidCanvas.style.display = 'block'; fluid.on = true; }
-    const u = fluid.mat.uniforms, n = FLUID_ARR.low.length;
-    const fi = (t - FLUID.t0) * FLUID.fps, i0 = Math.max(0, Math.min(n - 2, Math.floor(fi))), f = Math.max(0, Math.min(1, fi - i0));
-    const g = (a) => a[i0] + (a[i0 + 1] - a[i0]) * f;
-    u.uLow.value = g(FLUID_ARR.low); u.uMid.value = g(FLUID_ARR.mid); u.uHigh.value = g(FLUID_ARR.high);
-    u.uTime.value = t; u.uBright.value = Math.min(1, bl.b / 0.7);
-    u.uTint.value.set(bl.c[0] / 255, bl.c[1] / 255, bl.c[2] / 255);
-    if (fluid.lastT < 0 || Math.abs(t - fluid.lastT) > 1) {          // (re)start or seek: find the next beat
-      fluid.ripNext = FLUID_ONSETS.findIndex((o) => o > t - 0.05); if (fluid.ripNext < 0) fluid.ripNext = FLUID_ONSETS.length;
-    }
-    fluid.lastT = t;
-    while (fluid.ripNext < FLUID_ONSETS.length && FLUID_ONSETS[fluid.ripNext] <= t) {
-      const o = FLUID_ONSETS[fluid.ripNext++];
-      if (t - o < 0.4 && Math.random() < 0.6) fluid.rip[fluid.ripSlot++ % 4].set((Math.random() - 0.5) * 6, 0.5 - Math.random() * 4.5, o, 0.5 + Math.random() * 0.5);
-    }
-    const c = fluid.camera;
-    c.position.set(Math.sin(t * 0.05) * 0.7, 0.85 + Math.sin(t * 0.037) * 0.1, 3); c.lookAt(0, 0, -1.8);       // slow drift
-    fluid.renderer.render(fluid.scene, c);
-    return true;
-  }
   light.width = FW; light.height = FH;
   if (IS_COMPUTER) { clip.muted = true; clip.src = CLIP_SRC; clip.load(); }
   function updateClip(t) {
@@ -1080,8 +973,8 @@ function startPhone(roomId) {
   let T0 = null;                  // host-clock time at which media time was 0
   let fired = new Set();          // cues whose vibration was already triggered
   let testStart = -1e9;
-  let flashOn = [], chaos = [], blue = [], confetti = [];
-  const rollFlashes = () => { flashOn = FLASH_PEAKS.map(() => Math.random() < FLASH_CHANCE); chaos = buildChaos(); blue = buildBlue(); confetti = buildConfetti(); };
+  let flashOn = [], chaos = [], grad = [], confetti = [];
+  const rollFlashes = () => { flashOn = FLASH_PEAKS.map(() => Math.random() < FLASH_CHANCE); chaos = buildChaos(); grad = buildGradient(); confetti = buildConfetti(); };
   rollFlashes();
   let link = null, ready = false, gen = 0, retryTimer = null, wakeLock = null;
   let trim = 0;
@@ -1238,7 +1131,7 @@ function startPhone(roomId) {
       return;
     }
     fireActive = false;
-    let b = 0, col = [255, 255, 255];
+    let b = 0, col = [255, 255, 255], gradNow = null;
     if (T0 !== null && synced()) {
       const t = mediaTime();
       let last = -1;
@@ -1262,14 +1155,17 @@ function startPhone(roomId) {
         const f = e.p * cm * pulseEnv(a);
         if (f > b) { b = f; col = e.c; }
       }
-      const bl = blueFrame(blue, t);
-      if (!fluidFrame(t, bl) && bl && bl.b > b) { b = bl.b; col = bl.c; }   // 3D water if available, otherwise the plain dark blue
+      gradNow = gradientFrame(grad, t);
     }
-    if (!(T0 !== null && synced())) fluidHide();
     const tf = env(performance.now() - testStart);
     if (tf > b) { b = tf; col = [255, 255, 255]; }
     ctx.fillStyle = `rgb(${Math.round(col[0] * b)},${Math.round(col[1] * b)},${Math.round(col[2] * b)})`;
     ctx.fillRect(0, 0, FW, FH);
+    if (gradNow) {                                         // the sweeping black-blue-black band, drawn over the black
+      const g = ctx.createLinearGradient(gradNow.x0 * FW, 0, gradNow.x1 * FW, 0);
+      GRADIENT_STOPS.forEach(([pos, v]) => { const m = v * gradNow.k; g.addColorStop(pos, 'rgb(' + Math.round(gradNow.c[0] * m) + ',' + Math.round(gradNow.c[1] * m) + ',' + Math.round(gradNow.c[2] * m) + ')'); });
+      ctx.fillStyle = g; ctx.fillRect(0, 0, FW, FH);
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
