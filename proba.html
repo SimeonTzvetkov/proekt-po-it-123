@@ -289,26 +289,26 @@ const VCLIP = {
 };
 /* ---- Confetti for the guitar riffs: 2:45 until the fire video starts (computers) / the vertical fire video starts (phones) ---- */
 const CONFETTI_START = 165.0;
-// Guitar-band note onsets found in song.opus: [time, strength 0-1]
+// The guitar notes, tapped along to the song starting at 2:45.24 (63 taps).
+// [your tap time, same tap snapped to the nearest transient in song.opus (within 70 ms), strength 0-1 from the audio]
+const CONFETTI_SNAP = true;   // true: use the snapped time (removes the jitter of tapping); false: use the raw tap times
 const CONFETTI_NOTES = [
-  [165.196,0.69], [166.154,0.51], [166.299,0.40], [166.488,0.63], [166.604,0.66], [166.816,0.41], [166.943,0.54], [167.164,0.56],
-  [167.277,0.51], [167.466,0.62], [167.541,0.40], [167.782,0.58], [167.922,0.59], [168.000,0.39], [168.221,0.59], [168.308,0.35],
-  [168.392,0.42], [168.720,0.56], [168.865,0.65], [169.083,0.83], [169.181,0.65], [169.437,0.47], [169.715,0.74], [169.811,0.39],
-  [170.241,0.56], [170.397,0.41], [170.519,0.36], [170.824,0.51], [171.297,0.63], [171.474,0.49], [171.631,0.74], [171.779,0.64],
-  [171.971,0.57], [172.287,0.72], [172.403,0.58], [172.551,0.44], [172.647,0.60], [172.748,0.56], [172.978,0.60], [173.065,0.61],
-  [173.236,0.40], [173.410,0.73], [173.506,0.40], [173.909,0.80], [174.069,0.67], [174.223,1.27], [174.385,0.61], [174.458,0.43],
-  [174.589,0.67], [174.708,0.58], [174.864,1.47], [175.030,0.57], [175.117,0.45], [175.227,0.73], [175.340,0.70], [175.512,1.58],
-  [175.671,0.74], [175.761,0.53], [175.845,0.72], [175.996,1.10], [176.101,0.63], [176.223,0.53], [176.319,0.61], [176.481,1.25],
-  [176.574,0.52], [176.649,0.75], [176.809,0.80], [176.957,0.62], [177.128,1.14], [177.215,0.58], [177.320,0.68], [177.451,1.19],
-  [177.636,0.63], [177.819,0.72], [177.924,0.77], [178.092,1.47], [178.246,0.89], [178.321,0.60], [178.397,0.62], [178.580,1.22],
-  [178.719,0.64], [178.879,0.56], [179.061,1.31], [179.227,0.90], [179.413,0.71], [179.526,0.73], [179.601,0.61], [179.709,0.94],
-  [179.787,0.81], [179.871,0.68], [180.031,1.46], [180.135,0.75], [180.318,0.66], [180.423,0.61], [180.516,0.91], [180.675,1.09],
-  [180.829,0.62], [181.012,0.81], [181.157,1.11], [181.322,0.51], [181.395,0.48], [181.479,0.54], [181.642,1.51], [181.807,0.88],
-  [181.967,0.59], [182.068,0.57], [182.182,0.72], [182.289,1.19], [182.422,0.53], [182.536,0.39], [182.611,1.08], [182.736,0.77],
-  [182.948,0.65], [183.026,0.61], [183.171,0.42], [183.255,1.44], [183.369,0.93], [183.520,0.68], [183.647,0.63], [183.737,1.30],
-  [183.842,0.66], [183.955,0.60], [184.071,0.60], [184.222,1.26], [184.408,0.81], [184.486,0.71], [184.654,0.53], [184.750,0.41],
-  [184.863,1.01], [184.936,0.69], [185.032,0.50], [185.122,0.53], [185.212,0.67], [185.339,0.49], [185.517,0.74], [185.638,0.59],
-  [185.833,1.59]
+  [165.240,165.258,0.32], [165.754,165.754,0.44], [166.190,166.215,0.39], [166.337,166.303,0.55],
+  [166.490,166.491,0.75], [166.875,166.860,0.40], [167.238,167.220,0.52], [167.570,167.561,0.44],
+  [167.898,167.922,0.65], [168.356,168.343,0.46], [168.771,168.748,0.70], [168.913,168.938,0.45],
+  [169.061,169.085,0.93], [169.474,169.505,0.51], [169.805,169.790,0.53], [170.123,170.103,0.37],
+  [170.474,170.482,0.54], [170.939,170.910,0.42], [171.313,171.304,0.75], [171.470,171.476,0.69],
+  [171.638,171.633,0.85], [172.026,172.029,0.47], [172.377,172.363,0.66], [172.690,172.697,0.64],
+  [173.018,172.996,0.56], [173.482,173.473,0.50], [173.913,173.910,0.81], [174.054,174.072,0.80],
+  [174.220,174.228,1.00], [174.587,174.593,0.78], [174.937,174.932,0.74], [175.276,175.296,0.67],
+  [175.606,175.575,0.89], [176.104,176.106,0.83], [176.520,176.541,0.80], [176.764,176.783,0.94],
+  [176.918,176.908,0.74], [177.212,177.216,0.85], [177.527,177.502,1.00], [177.849,177.847,0.86],
+  [178.158,178.165,0.85], [178.628,178.638,0.76], [179.138,179.124,0.92], [179.283,179.294,0.45],
+  [179.438,179.415,0.85], [179.764,179.789,0.96], [180.125,180.146,0.90], [180.435,180.459,0.65],
+  [180.771,180.789,0.89], [181.242,181.245,0.75], [181.689,181.700,0.60], [181.836,181.819,0.98],
+  [181.981,181.967,0.81], [182.343,182.372,0.79], [182.657,182.613,1.00], [182.982,182.970,0.96],
+  [183.335,183.320,0.60], [183.807,183.799,0.69], [184.220,184.228,1.00], [184.387,184.413,1.00],
+  [184.570,184.542,0.89], [184.918,184.966,0.77], [185.221,185.246,0.90]
 ];
 const CONFETTI_COLORS = [     // r, g, b, weight: taken from this part of the video (red caps, cream shirts and wool, amber light, rust, a little teal)
   [196, 40, 38, 3], [236, 222, 190, 3], [226, 150, 54, 2.5], [150, 64, 38, 1.5], [44, 96, 104, 1]
@@ -321,8 +321,9 @@ function buildConfetti() {    // every device scatters its own pieces, so no two
     return '#fff';
   };
   const out = [];
-  for (const [t, st] of CONFETTI_NOTES) {
-    const n = st > 0.7 && Math.random() < 0.6 ? 2 : 1;          // strong notes can drop two pieces
+  for (const [tap, snapped, st] of CONFETTI_NOTES) {
+    const t = CONFETTI_SNAP ? snapped : tap;
+    const n = 2 + (st > 0.7 && Math.random() < 0.6 ? 1 : 0) - (Math.random() < 0.2 ? 1 : 0);   // every note drops a small handful (1-3 pieces)
     for (let i = 0; i < n; i++) out.push({ t: t + i * 0.012, x: 0.04 + Math.random() * 0.92, y: 0.03 + Math.random() * 0.94, a: Math.random() * Math.PI,
       l: (5 + 9 * st) * (0.8 + Math.random() * 0.5), w: 0.9 + Math.random() * 1.3, c: pick() });   // l, w in % of the screen's short side
   }
@@ -334,7 +335,10 @@ const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped afte
 const $ = (s) => document.querySelector(s);
 const app = $('#app');
 const room = new URLSearchParams(location.search).get('room');
-const VIA = TRANSPORTS[new URLSearchParams(location.search).get('via')] ? new URLSearchParams(location.search).get('via') : 'peerjs';
+const viaParam = new URLSearchParams(location.search).get('via');
+const VIA = viaParam === 'preview' ? 'preview' : TRANSPORTS[viaParam] ? viaParam : 'peerjs';
+const AUTOSTART = new URLSearchParams(location.search).get('autostart') === '1';   // the preview window starts by itself
+const MSG_ORIGIN = location.origin === 'null' ? '*' : location.origin;
 
 function startAnswerReceiver() {
   const m = location.hash.match(/a=([a-z0-9]{4})\.([A-Za-z0-9_-]+)/);
@@ -359,6 +363,7 @@ function hostTransport(kind, roomId, h) {
 }
 function clientTransport(kind, roomId, h) {
   try {
+    if (kind === 'preview') return clientPreview(roomId, h);
     if (kind === 'achex') return clientAchex(roomId, h);
     if (kind === 'achexrtc') return clientAchexRTC(roomId, h);
     if (kind === 'manual') return clientManual(roomId, h);
@@ -367,6 +372,28 @@ function clientTransport(kind, roomId, h) {
     setTimeout(() => h.onClose('Connection failed: ' + (e && e.message || e)), 0);
     return { send() {}, close() {} };
   }
+}
+
+/* --- Preview: the coordinator embeds this same page in an iframe (as a "phone" or a "desktop") and talks to it with postMessage,
+       exactly as if it were one more connected device (and it is not counted in the device numbers). --- */
+function clientPreview(roomId, h) {                 // runs inside the preview iframe
+  const onMsg = (e) => { if (e.source === window.parent && e.data && e.data.ls) h.onData(e.data.ls); };
+  window.addEventListener('message', onMsg);
+  setTimeout(() => { window.parent.postMessage({ lsPreview: 'ready' }, MSG_ORIGIN); h.onOpen(); }, 0);
+  return { send: (m) => window.parent.postMessage({ ls: m }, MSG_ORIGIN), close: () => window.removeEventListener('message', onMsg) };
+}
+function previewBridge(frameWin, h) {               // runs in the coordinator
+  let conn = null;
+  const onMsg = (e) => {
+    if (e.source !== frameWin || !e.data) return;
+    if (e.data.lsPreview === 'ready' && !conn) {
+      conn = { preview: true, send: (m) => frameWin.postMessage({ ls: m }, MSG_ORIGIN), onData: null, onClose: null };
+      h.onConnect(conn);
+    } else if (e.data.ls) { if (conn && conn.onData) conn.onData(e.data.ls); }
+    else if (e.data.lsKey) h.onKey(e.data.lsKey);
+  };
+  window.addEventListener('message', onMsg);
+  return { close: () => { window.removeEventListener('message', onMsg); if (conn && conn.onClose) { const f = conn.onClose; conn.onClose = null; f(); } } };
 }
 
 /* --- PeerJS: coordinator is the hub --- */
@@ -671,7 +698,7 @@ function startCoordinator() {
     <div class="panel">
       <input type="file" id="file" accept="audio/*,video/*">
       <video id="audio" controls playsinline></video>
-      <div class="row" style="margin-top:12px"><button class="ghost" id="fs">Fullscreen video</button></div>
+      <div class="row" style="margin-top:12px"><button class="ghost" id="fs">Fullscreen video</button><button class="ghost" id="pvPhone">Preview as phone</button><button class="ghost" id="pvPc">Preview as desktop</button></div>
     </div>
     <div class="panel">
       <label for="delay">Light delay (ms) – raise it if your speakers lag behind the lights</label>
@@ -692,14 +719,18 @@ function startCoordinator() {
   const vibs = new Map();    // connection -> 'yes' | 'no' | 'none' | 'untested' (reported by the phone)
   let compsCount = 0;   // connected computers: the fire blackout only happens when there is one
   const updateCount = () => {
-    let comps = 0;
-    conns.forEach((c) => { if (kinds.get(c) === 'computer') comps++; });
-    $('#nphones').textContent = conns.size - comps;
+    let comps = 0, phones = 0, yes = 0, bad = 0, unk = 0;
+    conns.forEach((c) => {
+      if (c.preview) return;                                        // the preview window is not a real device
+      if (kinds.get(c) === 'computer') { comps++; return; }
+      phones++;
+      const v = vibs.get(c) || 'untested';
+      if (v === 'yes') yes++; else if (v === 'no' || v === 'none') bad++; else unk++;
+    });
+    $('#nphones').textContent = phones;
     $('#ncomps').textContent = comps;
     compsCount = comps;
-    let yes = 0, bad = 0, unk = 0;
-    conns.forEach((c) => { if (kinds.get(c) === 'computer') return; const v = vibs.get(c) || 'untested'; if (v === 'yes') yes++; else if (v === 'no' || v === 'none') bad++; else unk++; });
-    $('#vibLine').textContent = conns.size - comps > 0 ? 'Vibration on phones: ' + yes + ' confirmed, ' + bad + ' not working or unsupported, ' + unk + ' not tested yet' : '';
+    $('#vibLine').textContent = phones > 0 ? 'Vibration on phones: ' + yes + ' confirmed, ' + bad + ' not working or unsupported, ' + unk + ' not tested yet' : '';
   };
   let delay = 0;
 
@@ -753,6 +784,7 @@ function startCoordinator() {
   };
   async function startVia(switched) {
     const my = ++token;
+    closePreview();
     if (current) { try { current.close(); } catch (e) {} current = null; }
     conns.clear(); kinds.clear(); vibs.clear(); updateCount(); linkRows.clear();
     id = 'lightshow-' + Math.random().toString(36).slice(2, 7);   // a fresh room for every (re)start, so old phones can't linger in it
@@ -806,6 +838,54 @@ function startCoordinator() {
   $('#delay').addEventListener('input', (e) => {
     delay = +e.target.value; $('#delayv').textContent = delay; send(config());
   });
+  /* --- fullscreen previews: the real client page in an iframe, fed by the coordinator's playback --- */
+  let preview = null;
+  function handleKey(k) {
+    if (k === ' ') { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); }
+    else if (k === 'ArrowRight') audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5);
+    else if (k === 'ArrowLeft') audio.currentTime = Math.max(0, audio.currentTime - 5);
+    else if (k === 'Escape') closePreview();
+  }
+  const onPreviewKey = (e) => { if (!preview) return; if (e.key === ' ' || e.key.indexOf('Arrow') === 0) e.preventDefault(); handleKey(e.key); };
+  function closePreview() {
+    if (!preview) return;
+    const p = preview; preview = null;
+    p.bridge.close(); window.removeEventListener('resize', p.fit); document.removeEventListener('keydown', onPreviewKey);
+    p.wrap.remove();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
+  function openPreview(kind) {
+    closePreview();
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;background:#000;z-index:1000;display:flex;align-items:center;justify-content:center';
+    const frame = document.createElement('iframe');
+    frame.allow = 'autoplay; fullscreen'; frame.setAttribute('scrolling', 'no');
+    frame.style.cssText = 'border:0;background:#000;' + (kind === 'phone' ? 'border-radius:26px;box-shadow:0 0 0 2px #2a2a2a;' : '');
+    frame.src = location.pathname + '?room=preview&via=preview&autostart=1&device=' + (kind === 'phone' ? 'phone' : 'pc');
+    const fit = () => {
+      let W, H;
+      if (kind === 'phone') { H = innerHeight * 0.97; W = H * 9 / 19.5; if (W > innerWidth * 0.97) { W = innerWidth * 0.97; H = W * 19.5 / 9; } }
+      else { W = Math.min(innerWidth, innerHeight * 16 / 9); H = W * 9 / 16; }
+      frame.style.width = Math.round(W) + 'px'; frame.style.height = Math.round(H) + 'px';
+    };
+    const hint = document.createElement('div');
+    hint.textContent = (kind === 'phone' ? 'Phone' : 'Desktop') + ' preview · Space: play/pause · ← →: ±5 s · Esc: close';
+    hint.style.cssText = 'position:absolute;left:0;right:0;bottom:10px;text-align:center;color:#8b90a0;font:14px system-ui,sans-serif;pointer-events:none;transition:opacity 1s';
+    const x = document.createElement('button');
+    x.textContent = '✕'; x.title = 'Close preview'; x.className = 'ghost';
+    x.style.cssText = 'position:absolute;top:10px;right:10px;opacity:.35;padding:6px 12px';
+    x.onclick = closePreview;
+    wrap.append(frame, hint, x); document.body.appendChild(wrap);
+    fit(); window.addEventListener('resize', fit);
+    const bridge = previewBridge(frame.contentWindow, { onConnect: (c) => attach(c), onKey: handleKey });
+    preview = { wrap, frame, bridge, fit };
+    document.addEventListener('keydown', onPreviewKey);
+    if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
+    setTimeout(() => { hint.style.opacity = '0'; }, 5000);
+  }
+  document.addEventListener('fullscreenchange', () => { if (preview) { if (!document.fullscreenElement) closePreview(); else preview.fit(); } });
+  $('#pvPhone').addEventListener('click', () => openPreview('phone'));
+  $('#pvPc').addEventListener('click', () => openPreview('pc'));
   $('#fs').addEventListener('click', () => (audio.requestFullscreen || audio.webkitRequestFullscreen).call(audio));
   $('#test').addEventListener('click', () => send({ type: 'test' }));
   $('#resync').addEventListener('click', () => send({ type: 'resync' }));
@@ -1194,6 +1274,7 @@ function startPhone(roomId) {
     document.body.classList.add('running');
   });
   document.addEventListener('fullscreenchange', () => {
+    if (AUTOSTART) return;
     if (!document.fullscreenElement) document.body.classList.remove('running');
   });
   document.addEventListener('visibilitychange', async () => {
@@ -1204,12 +1285,18 @@ function startPhone(roomId) {
   });
   let lastTap = 0;                                       // double-tap the black screen to leave
   document.body.addEventListener('click', () => {
-    if (!document.body.classList.contains('running')) return;
+    if (AUTOSTART || !document.body.classList.contains('running')) return;
     const n = Date.now();
     if (n - lastTap < 400) { document.exitFullscreen?.(); document.body.classList.remove('running'); }
     lastTap = n;
   });
 
+  if (AUTOSTART) {                                      // preview window: no start button, show the effects right away
+    document.body.classList.add('running');
+    if (IS_COMPUTER) clip.play().then(() => { clip.pause(); clip.currentTime = 0; }).catch(() => {});
+    else vclip.play().then(() => { vclip.pause(); vclip.currentTime = 0; }).catch(() => {});
+    addEventListener('keydown', (e) => { window.parent.postMessage({ lsKey: e.key }, MSG_ORIGIN); if (e.key === ' ' || e.key.indexOf('Arrow') === 0) e.preventDefault(); });   // keys go to the coordinator
+  }
   connect();
 }
 
