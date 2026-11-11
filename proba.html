@@ -329,6 +329,7 @@ function buildConfetti() {    // every device scatters its own pieces, so no two
   }
   return out;
 }
+const BUILD = '2026-11-11 confetti on tapped notes, cached pile';   // shown at the bottom of the page: check it after uploading, browsers cache old copies
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
 
@@ -935,25 +936,34 @@ function startPhone(roomId) {
   /* --- vertical fire video (phones in portrait, 2:55.460 - 2:57.918) --- */
   const vclip = $('#vclip');
 
-  /* --- confetti: a thin rectangle drops at a random spot and angle on every guitar note and stays, stacking up like confetti on a floor --- */
+  /* --- confetti: a thin rectangle drops at a random spot and angle on every guitar note and stays, stacking up like confetti on a floor ---
+         Pieces that have landed are baked once into an off-screen "pile" canvas; each frame only copies the pile and animates the few
+         pieces that landed in the last 0.1 s, so the effect stays cheap and smooth even on slow devices. --- */
   const confCanvas = $('#confetti'), cctx = confCanvas.getContext('2d');
-  let confOn = false;
+  const pile = document.createElement('canvas'), pctx = pile.getContext('2d');
+  let confOn = false, pileIdx = 0, confLastT = null;
+  function drawPiece(c, p, pop, age, u) {
+    c.save(); c.translate(p.x * confCanvas.width, p.y * confCanvas.height); c.rotate(p.a); c.scale(pop, pop);
+    c.fillStyle = 'rgba(0,0,0,0.4)'; c.fillRect(-p.l * u / 2 + 0.35 * u, -p.w * u / 2 + 0.35 * u, p.l * u, p.w * u);   // little shadow, so the stack has depth
+    c.fillStyle = p.c; c.fillRect(-p.l * u / 2, -p.w * u / 2, p.l * u, p.w * u);
+    if (age < 0.07) { c.fillStyle = 'rgba(255,255,255,' + (0.7 * (1 - age / 0.07)).toFixed(2) + ')'; c.fillRect(-p.l * u / 2, -p.w * u / 2, p.l * u, p.w * u); }   // flash as it lands
+    c.restore();
+  }
   function confettiFrame(t) {
     const end = IS_COMPUTER ? CLIP_START : VCLIP.start;            // right before the (vertical) fire video
-    if (t === null || t < CONFETTI_START || t >= end) { if (confOn) { confCanvas.style.display = 'none'; confOn = false; } return; }
+    if (t === null || t < CONFETTI_START || t >= end) { if (confOn) { confCanvas.style.display = 'none'; confOn = false; } confLastT = null; pileIdx = 0; return; }
     if (!confOn) { confCanvas.style.display = 'block'; confOn = true; }
     const k = Math.min(window.devicePixelRatio || 1, 2), W = Math.round(innerWidth * k), H = Math.round(innerHeight * k);
-    if (confCanvas.width !== W || confCanvas.height !== H) { confCanvas.width = W; confCanvas.height = H; }
+    if (confCanvas.width !== W || confCanvas.height !== H) { confCanvas.width = W; confCanvas.height = H; pile.width = W; pile.height = H; pileIdx = 0; }
+    if (confLastT === null || t < confLastT - 0.02) { pctx.clearRect(0, 0, W, H); pileIdx = 0; }    // start or seek backwards: rebuild the pile
+    confLastT = t;
     const u = Math.min(W, H) / 100;
+    while (pileIdx < confetti.length && confetti[pileIdx].t <= t - 0.1) drawPiece(pctx, confetti[pileIdx++], 1, 1, u);   // landed: bake into the pile
     cctx.fillStyle = '#000'; cctx.fillRect(0, 0, W, H);
-    for (const p of confetti) {                                      // sorted by time: later pieces land on top of earlier ones
-      if (p.t > t) break;
-      const age = t - p.t, pop = age < 0.1 ? 1 + 0.45 * Math.pow(1 - age / 0.1, 2) : 1;
-      cctx.save(); cctx.translate(p.x * W, p.y * H); cctx.rotate(p.a); cctx.scale(pop, pop);
-      cctx.fillStyle = 'rgba(0,0,0,0.4)'; cctx.fillRect(-p.l * u / 2 + 0.35 * u, -p.w * u / 2 + 0.35 * u, p.l * u, p.w * u);   // little shadow, so the stack has depth
-      cctx.fillStyle = p.c; cctx.fillRect(-p.l * u / 2, -p.w * u / 2, p.l * u, p.w * u);
-      if (age < 0.07) { cctx.fillStyle = 'rgba(255,255,255,' + (0.7 * (1 - age / 0.07)).toFixed(2) + ')'; cctx.fillRect(-p.l * u / 2, -p.w * u / 2, p.l * u, p.w * u); }   // flash as it lands
-      cctx.restore();
+    cctx.drawImage(pile, 0, 0);
+    for (let i = pileIdx; i < confetti.length && confetti[i].t <= t; i++) {                       // the newest pieces: pop + flash
+      const age = t - confetti[i].t;
+      drawPiece(cctx, confetti[i], 1 + 0.45 * Math.pow(1 - age / 0.1, 2), age, u);
     }
   }
   let vclipReady = false, vclipFallback = false;
@@ -1303,6 +1313,7 @@ function startPhone(roomId) {
 /* ============ START ============ (last, so every const above is initialised before any page code runs) */
 if (/[#&]a=/.test(location.hash)) startAnswerReceiver();      // someone opened a phone's reply link
 else room ? startPhone(room) : startCoordinator();
+if (!AUTOSTART && !/[#&]a=/.test(location.hash)) app.insertAdjacentHTML('beforeend', '<p class="dim" style="font-size:.75rem;margin-top:28px">build: ' + BUILD + '</p>');
 </script>
 </body>
 </html>
