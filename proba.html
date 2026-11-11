@@ -169,15 +169,16 @@ const GRADIENT_SECTIONS = [
   { start: 142.55, end: 163.61, dir: -1 }    // 2:22.55 - 2:43.61: sweeps right to left; then plain black until the confetti
 ];
 const GRADIENT_CHANCE = 0.45;                // share of devices showing a sweep at any moment (every device gets its own sweeps)
-const GRADIENT_SWEEP = [5, 9];               // seconds one sweep takes to cross the screen
+const GRADIENT_SWEEP = [6.5, 11];            // seconds one sweep takes to cross the screen (wider band = a little longer, so it stays calm)
 const GRADIENT_FADE_IN = 1.5;                // seconds: devices that are mid-sweep when a section starts fade in gently (the end is a hard cut)
-const GRADIENT_STOPS = [[0, 0], [0.15, 0.06], [0.3, 0.3], [0.5, 1], [0.7, 0.3], [0.85, 0.06], [1, 0]];   // black -> blue -> black, soft edges
+const GRADIENT_WIDTH = [1.2, 1.6];           // band width as a multiple of the screen width: wide and soft, not a thin scanner line
+const GRADIENT_STOPS = [[0, 0], [0.1, 0.05], [0.25, 0.35], [0.4, 0.85], [0.5, 1], [0.6, 0.85], [0.75, 0.35], [0.9, 0.05], [1, 0]];   // black -> blue -> black, broad glow
 function buildGradient() {                   // this device's own, out-of-step series of sweeps
   const r = (lo, hi) => lo + Math.random() * (hi - lo);
   const meanLen = (GRADIENT_SWEEP[0] + GRADIENT_SWEEP[1]) / 2, meanGap = meanLen * (1 - GRADIENT_CHANCE) / GRADIENT_CHANCE;
   const ev = [];
   GRADIENT_SECTIONS.forEach((sec) => {
-    const sweep = (t) => ({ t, d: r(GRADIENT_SWEEP[0], GRADIENT_SWEEP[1]), w: r(0.75, 1.1), p: r(0.55, 0.9), c1: hsl(r(206, 232), 0.95, 0.42), c2: hsl(r(206, 232), 0.95, 0.42), dir: sec.dir, end: sec.end });
+    const sweep = (t) => ({ t, d: r(GRADIENT_SWEEP[0], GRADIENT_SWEEP[1]), w: r(GRADIENT_WIDTH[0], GRADIENT_WIDTH[1]), p: r(0.55, 0.9), c1: hsl(r(206, 232), 0.95, 0.42), c2: hsl(r(206, 232), 0.95, 0.42), dir: sec.dir, end: sec.end });
     let t = sec.start - Math.random() * (meanLen + meanGap);       // random phase: devices do not sweep in unison
     while (t < sec.end - 1) {
       const e = sweep(t);
@@ -278,7 +279,7 @@ function buildConfetti() {    // every device scatters its own pieces, so no two
   }
   return out;
 }
-const BUILD = '2026-11-11 gradient sweeps, no 3D, confetti ends 3:04.18';   // shown at the bottom of the page: check it after uploading, browsers cache old copies
+const BUILD = '2026-11-11 wide gradient sweeps, no 3D, confetti ends 3:04.18';   // shown at the bottom of the page: check it after uploading, browsers cache old copies
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
 
