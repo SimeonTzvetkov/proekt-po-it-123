@@ -106,7 +106,8 @@ const FLASH_COLORS = FLASH_PEAKS.map((_, i) => {
 /* ---- Flowing colour pulses for the two dynamic parts (follow the main beat) ---- */
 const CHAOS_SECTIONS = [          // [start, end, fade-out end]
   [95.561, 112.330, 112.620],     // 1:35.561 - 1:52.330
-  [113.620, 122.665, 122.950]     // 1:53.620 - 2:02.665
+  [113.620, 122.665, 122.950],    // 1:53.620 - 2:02.665
+  [177.918, 184.460, 184.750]     // 2:57.918 - 3:04.75: the same verse again, shorter (starts when the vertical fire video ends)
 ];
 // The main beat found in the audio: six beats per bar, every 3 sixteenth-notes (about 0.48 s). [time, position in bar; 0 = downbeat]
 const MAIN_BEATS = [
@@ -119,7 +120,9 @@ const MAIN_BEATS = [
   [111.009,0], [111.496,3], [111.978,6], [113.620,0], [114.074,3], [114.567,6],
   [115.031,9], [115.525,12], [116.007,15], [116.169,0], [116.657,3], [117.144,6],
   [117.615,9], [118.114,12], [118.590,15], [118.752,0], [119.234,3], [119.716,6],
-  [120.198,9], [120.686,12], [121.167,15], [121.330,0], [121.817,3], [122.299,6]
+  [120.198,9], [120.686,12], [121.167,15], [121.330,0], [121.817,3], [122.299,6],
+  // 2:57.918 - 3:04.46, the same verse again (same six-beat bars)
+  [177.918,0], [178.103,0], [178.590,3], [179.078,6], [179.536,9], [180.042,12], [180.523,15], [180.686,0], [181.174,3], [181.655,6], [182.143,9], [182.625,12], [183.098,15], [183.263,0], [183.745,3], [184.233,6]
 ];
 const PULSE_ATTACK = 0.06, PULSE_HOLD = 0.03, PULSE_DECAY = 0.40;   // seconds: soft rise, short peak, long glowing fade
 const PULSE_LEN = PULSE_ATTACK + PULSE_HOLD + PULSE_DECAY;
@@ -165,8 +168,8 @@ function chaosMask(t) {                            // 1 inside a section, linear
 
 /* ---- Slow black-blue-black gradient that sweeps across the screen, on some devices at a time ---- */
 const GRADIENT_SECTIONS = [
-  { start: 32.95, end: 72.30, dir: 1 },      // 0:32.95 - 1:12.30, up to the sudden white: sweeps left to right
-  { start: 142.55, end: 163.61, dir: -1 }    // 2:22.55 - 2:43.61: sweeps right to left; then plain black until the confetti
+  { start: 32.95, end: 72.30, dir: 1, fadeOut: 0 },      // 0:32.95 - 1:12.30, up to the sudden white: sweeps left to right, hard cut into the white
+  { start: 142.55, end: 163.61, dir: -1, fadeOut: 3 }    // 2:22.55 - 2:43.61: sweeps right to left and fades out over the last 3 s; then plain black until the confetti
 ];
 const GRADIENT_CHANCE = 0.45;                // share of devices showing a sweep at any moment (every device gets its own sweeps)
 const GRADIENT_SWEEP = [6.5, 11];            // seconds one sweep takes to cross the screen (wider band = a little longer, so it stays calm)
@@ -197,7 +200,8 @@ function gradientFrame(ev, t) {              // -> { x0, x1, k, c } (the band, a
     if (a < 0 || a > e.d || e.end !== sec.end) continue;
     const x = a / e.d, cx = e.dir > 0 ? -e.w / 2 + x * (1 + e.w) : 1 + e.w / 2 - x * (1 + e.w);   // the band enters at one edge and leaves at the other
     const fadeIn = Math.min(1, (t - sec.start) / GRADIENT_FADE_IN);
-    return { x0: cx - e.w / 2, x1: cx + e.w / 2, k: e.p * fadeIn, c: e.c1.map((v, i) => v + (e.c2[i] - v) * x) };   // colour drifts a little between two blues
+    const fo = sec.fadeOut ? Math.max(0, Math.min(1, (sec.end - t) / sec.fadeOut)) : 1, fadeOut = fo * fo * (3 - 2 * fo);   // no sudden black in the middle of a band
+    return { x0: cx - e.w / 2, x1: cx + e.w / 2, k: e.p * fadeIn * fadeOut, c: e.c1.map((v, i) => v + (e.c2[i] - v) * x) };   // colour drifts a little between two blues
   }
   return null;
 }
@@ -238,7 +242,8 @@ const VCLIP = {
 };
 /* ---- Confetti for the guitar riffs: 2:45 until 3:04.180 on computers (a little black before the fire video) / until the vertical fire video on phones ---- */
 const CONFETTI_START = 165.0;
-const CONFETTI_END_PC = 184.180;
+const BURN = { start: 175.550, end: 177.918 };   // computers: the confetti suddenly catches fire at 2:55.550, just after the vertical fire video starts on phones, and is burnt up when the flashes begin
+const CONFETTI_END_PC = BURN.end;
 // The guitar notes, tapped along to the song starting at 2:45.24 (63 taps).
 // [your tap time, same tap snapped to the nearest transient in song.opus (within 70 ms), strength 0-1 from the audio]
 const CONFETTI_SNAP = true;   // true: use the snapped time (removes the jitter of tapping); false: use the raw tap times
@@ -274,12 +279,23 @@ function buildConfetti() {    // every device scatters its own pieces, so no two
   for (const [tap, snapped, st] of CONFETTI_NOTES) {
     const t = CONFETTI_SNAP ? snapped : tap;
     const n = 2 + (st > 0.7 && Math.random() < 0.6 ? 1 : 0) - (Math.random() < 0.2 ? 1 : 0);   // every note drops a small handful (1-3 pieces)
-    for (let i = 0; i < n; i++) out.push({ t: t + i * 0.012, x: 0.04 + Math.random() * 0.92, y: 0.03 + Math.random() * 0.94, a: Math.random() * Math.PI,
-      l: (5 + 9 * st) * (0.8 + Math.random() * 0.5), w: 0.9 + Math.random() * 1.3, c: pick() });   // l, w in % of the screen's short side
+    for (let i = 0; i < n; i++) {
+      const pc = { t: t + i * 0.012, x: 0.04 + Math.random() * 0.92, y: 0.03 + Math.random() * 0.94, a: Math.random() * Math.PI,
+        l: (5 + 9 * st) * (0.8 + Math.random() * 0.5), w: 0.9 + Math.random() * 1.3, c: pick() };   // l, w in % of the screen's short side
+      if (IS_COMPUTER && pc.t <= BURN.start) {                      // how this piece will burn
+        const life = 1.1 + Math.random() * 1.0;
+        pc.bs = { delay: Math.random() * 0.18, life, seed: Math.random(),
+          flames: [0, 1, 2].map(() => ({ dx: (Math.random() - 0.5) * pc.l * 0.8, w: 0.9 + Math.random() * 0.9, h: 4 + Math.random() * 7, ph: Math.random() })),
+          sparks: [0, 1, 2, 3, 4].map(() => ({ ang: -Math.PI / 2 + (Math.random() - 0.5) * 1.3, spd: 12 + Math.random() * 30, born: Math.random() * life * 0.85, life: 0.35 + Math.random() * 0.6 })) };
+      }
+      out.push(pc);
+    }
   }
   return out;
 }
-const BUILD = '2026-11-11 wide gradient sweeps, no 3D, confetti ends 3:04.18';   // shown at the bottom of the page: check it after uploading, browsers cache old copies
+const BUILD = '2026-11-11 burning confetti + flash sequence 2:57.9-3:04.75';   // shown at the bottom of the page: check it after uploading, browsers cache old copies
+// The finish: a sudden white light at 3:36.540 that fades out over 4 seconds
+const FINISH = { t: 216.540, fade: 4 };
 const LATE_TOLERANCE = 0.5; // s: cues missed by more than this are skipped after a (re)sync
 /* ================================ */
 
@@ -899,12 +915,60 @@ function startPhone(roomId) {
     if (age < 0.07) { c.fillStyle = 'rgba(255,255,255,' + (0.7 * (1 - age / 0.07)).toFixed(2) + ')'; c.fillRect(-p.l * u / 2, -p.w * u / 2, p.l * u, p.w * u); }   // flash as it lands
     c.restore();
   }
+  const fireColor = (f) => {                           // white-hot -> orange -> red -> charcoal ash
+    const S = [[0, 255, 246, 210], [0.12, 255, 190, 70], [0.4, 240, 110, 30], [0.7, 170, 45, 20], [1, 45, 32, 28]];
+    for (let i = 1; i < S.length; i++) if (f <= S[i][0]) { const a = S[i - 1], b = S[i], k = (f - a[0]) / (b[0] - a[0]); return [a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + (b[3] - a[3]) * k]; }
+    return [45, 32, 28];
+  };
+  function drawBurn(t, W, H, u) {                      // every piece that has landed catches fire at once, flickers, glows, throws sparks and burns up
+    const t0 = t - BURN.start, burning = [];
+    cctx.globalCompositeOperation = 'source-over';
+    cctx.fillStyle = '#000'; cctx.fillRect(0, 0, W, H);
+    if (t0 < 0.5) { cctx.fillStyle = 'rgba(255,140,40,' + (0.28 * Math.pow(1 - t0 / 0.5, 2)).toFixed(3) + ')'; cctx.fillRect(0, 0, W, H); }   // the floor lights up
+    for (const p of confetti) {
+      if (p.t > BURN.start) break;                     // pieces that would land after the fire starts never appear
+      const b = p.bs, bt = t0 - b.delay, x = p.x * W, y = p.y * H;
+      if (bt < 0) { drawPiece(cctx, p, 1, u); continue; }
+      if (bt >= b.life) continue;                      // burnt up
+      const f = bt / b.life, flick = 0.82 + 0.18 * Math.sin(bt * 26 + b.seed * 40), col = fireColor(f);
+      const shrink = (1 - 0.5 * Math.pow(f, 1.5)) * (f > 0.75 ? (1 - f) / 0.25 * 0.6 + 0.4 : 1);
+      cctx.save(); cctx.translate(x, y); cctx.rotate(p.a);
+      cctx.fillStyle = 'rgb(' + col.map((v) => Math.min(255, Math.round(v * flick))).join(',') + ')';
+      cctx.fillRect(-p.l * u * shrink / 2, -p.w * u * shrink / 2, p.l * u * shrink, p.w * u * shrink);
+      cctx.restore();
+      burning.push([p, b, bt, f, x, y]);
+    }
+    cctx.globalCompositeOperation = 'lighter';        // glow, flames and sparks add light on top
+    for (const [p, b, bt, f, x, y] of burning) {
+      const a = 1 - f, r = (p.l * 0.55 + 3) * u * (1 - 0.4 * f);
+      const g = cctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, 'rgba(255,150,50,' + (0.42 * a).toFixed(3) + ')'); g.addColorStop(1, 'rgba(255,90,20,0)');
+      cctx.fillStyle = g; cctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+      for (const fl of b.flames) {                      // little flames rising from the piece
+        const h = fl.h * u * (0.55 + 0.45 * Math.sin(bt * (14 + fl.ph * 8) + fl.ph * 6)) * (1 - f * 0.85);
+        if (h < 0.3 * u) continue;
+        const bx = x + fl.dx * u, w = fl.w * u, sway = Math.sin(bt * 9 + fl.ph * 9) * 0.25 * w;
+        cctx.fillStyle = 'rgba(255,105,25,' + (0.7 * a).toFixed(3) + ')';
+        cctx.beginPath(); cctx.moveTo(bx - w, y); cctx.quadraticCurveTo(bx - w * 0.2, y - h * 0.5, bx + sway, y - h); cctx.quadraticCurveTo(bx + w * 0.2, y - h * 0.5, bx + w, y); cctx.fill();
+        cctx.fillStyle = 'rgba(255,215,110,' + (0.75 * a).toFixed(3) + ')';
+        cctx.beginPath(); cctx.moveTo(bx - w * 0.5, y); cctx.quadraticCurveTo(bx - w * 0.1, y - h * 0.3, bx + sway * 0.6, y - h * 0.6); cctx.quadraticCurveTo(bx + w * 0.1, y - h * 0.3, bx + w * 0.5, y); cctx.fill();
+      }
+      for (const sp of b.sparks) {
+        const age = bt - sp.born;
+        if (age < 0 || age > sp.life) continue;
+        cctx.fillStyle = 'rgba(255,205,100,' + (1 - age / sp.life).toFixed(2) + ')';
+        cctx.fillRect(x + Math.cos(sp.ang) * sp.spd * u * age, y + Math.sin(sp.ang) * sp.spd * u * age - 3 * u * age * age, 0.4 * u, 0.4 * u);
+      }
+    }
+    cctx.globalCompositeOperation = 'source-over';
+  }
   function confettiFrame(t) {
     const end = IS_COMPUTER ? CONFETTI_END_PC : VCLIP.start;       // everything disappears at once, before the (vertical) fire video
     if (t === null || t < CONFETTI_START || t >= end) { if (confOn) { confCanvas.style.display = 'none'; confOn = false; } confLastT = null; pileIdx = 0; return; }
     if (!confOn) { confCanvas.style.display = 'block'; confOn = true; }
     const k = Math.min(window.devicePixelRatio || 1, 2), W = Math.round(innerWidth * k), H = Math.round(innerHeight * k);
     if (confCanvas.width !== W || confCanvas.height !== H) { confCanvas.width = W; confCanvas.height = H; pile.width = W; pile.height = H; pileIdx = 0; }
+    if (IS_COMPUTER && t >= BURN.start) { confLastT = null; drawBurn(t, W, H, Math.min(W, H) / 100); return; }   // on fire
     if (confLastT === null || t < confLastT - 0.02) { pctx.clearRect(0, 0, W, H); pileIdx = 0; }    // start or seek backwards: rebuild the pile
     confLastT = t;
     const u = Math.min(W, H) / 100;
@@ -1157,6 +1221,8 @@ function startPhone(roomId) {
         if (f > b) { b = f; col = e.c; }
       }
       gradNow = gradientFrame(grad, t);
+      const fin = t - FINISH.t;
+      if (fin >= 0 && fin < FINISH.fade) { const f = 1 - fin / FINISH.fade; if (f > b) { b = f; col = [255, 255, 255]; } }   // sudden white, then a slow fade to black
     }
     const tf = env(performance.now() - testStart);
     if (tf > b) { b = tf; col = [255, 255, 255]; }
